@@ -39,7 +39,7 @@
 import { readFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
-import Schema from '@deepseek-ai/schemastery'
+import Schema from './src/schema.js'
 
 export const Config = Schema.object({
   // Relay base URL (no trailing slash), e.g. https://8.148.8.249:24000
