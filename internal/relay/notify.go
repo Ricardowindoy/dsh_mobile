@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,8 +44,15 @@ const (
 // for completion cards. Both are display-only: the decision still rides the
 // phone's device credential, and the card itself confers no authority.
 type NotifyMessage struct {
+	// V is the notification protocol version. Only v2 is served: v1 clients
+	// (no id/slot/ack) are refused rather than silently degraded.
+	V int `json:"v"`
+	// ID is the idempotency key: one logical event, one id, no timestamps.
+	ID string `json:"id"`
+	// Slot is the display slot on the device; cards sharing a slot replace
+	// each other (done cards use one slot per session). Falls back to ID.
+	Slot      string `json:"slot,omitempty"`
 	Kind      string `json:"kind"` // approval | question | done | retract
-	ID        string `json:"id"`
 	SessionID string `json:"sessionId,omitempty"`
 	ToolName  string `json:"toolName,omitempty"`
 	Reason    string `json:"reason,omitempty"`
@@ -96,17 +105,80 @@ type deviceNotify struct {
 type notifyHub struct {
 	mu           sync.Mutex
 	seq          uint64
+	seqFile      string
 	devices      map[string]*deviceNotify
 	answers      []notifyAnswer
 	answerCh     chan struct{} // broadcast: new answer available
 	answeredOnce map[string]time.Time
+	// acked[deviceID][messageID] = ack time. Acked cards are never replayed.
+	acked map[string]map[string]time.Time
 }
 
-func newNotifyHub() *notifyHub {
-	return &notifyHub{
+func newNotifyHub(seqFile string) *notifyHub {
+	h := &notifyHub{
 		devices:  make(map[string]*deviceNotify),
 		answerCh: make(chan struct{}, 1),
+		acked:    make(map[string]map[string]time.Time),
+		seqFile:  seqFile,
 	}
+	// Load the persisted sequence. A missing file starts at 0; a corrupt one
+	// also starts at 0 and the time-based floor below keeps us monotonic.
+	if seqFile != "" {
+		if raw, err := os.ReadFile(seqFile); err == nil {
+			if v, err := strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64); err == nil {
+				h.seq = v
+			}
+		}
+	}
+	return h
+}
+
+// nextSeqLocked assigns the next sequence. The value is max(last+1, now in
+// milliseconds): strictly increasing across restarts (the file may lag) and
+// also a usable cursor for clients that reconnect later.
+func (h *notifyHub) nextSeqLocked() uint64 {
+	now := uint64(time.Now().UnixMilli())
+	next := h.seq + 1
+	if now > next {
+		next = now
+	}
+	h.seq = next
+	if h.seqFile != "" {
+		_ = os.WriteFile(h.seqFile, []byte(strconv.FormatUint(next, 10)), 0o600)
+	}
+	return next
+}
+
+// markAcked records that a device has rendered these message ids.
+func (h *notifyHub) markAcked(deviceID string, ids []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	m := h.acked[deviceID]
+	if m == nil {
+		m = make(map[string]time.Time)
+		h.acked[deviceID] = m
+	}
+	now := time.Now()
+	for _, id := range ids {
+		if id != "" {
+			m[id] = now
+		}
+	}
+	// Bound the ack table by TTL.
+	for id, at := range m {
+		if now.Sub(at) > notifyBacklogMaxAge {
+			delete(m, id)
+		}
+	}
+}
+
+func (h *notifyHub) isAcked(deviceID, id string) bool {
+	m := h.acked[deviceID]
+	if m == nil {
+		return false
+	}
+	_, ok := m[id]
+	return ok
 }
 
 func (h *notifyHub) device(id string) *deviceNotify {
@@ -123,8 +195,8 @@ func (h *notifyHub) publish(deviceID string, msg NotifyMessage) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := h.device(deviceID)
-	h.seq++
-	msg.Seq = h.seq
+	msg.V = 2
+	msg.Seq = h.nextSeqLocked()
 	d.ring = append(d.ring, msg)
 	if len(d.ring) > notifyRingPerDevice {
 		d.ring = d.ring[len(d.ring)-notifyRingPerDevice:]
@@ -337,16 +409,18 @@ func (r *Relay) handleNotifyWatch(w http.ResponseWriter, req *http.Request) {
 	if hasAfter && after > r.notify.seq {
 		hasAfter = false
 	}
+	// Zero replay by default: a fresh connection only gets live cards. A
+	// reconnect must name its cursor; history is opt-in. This is what kills
+	// the "old notifications flood in" class of bugs.
 	backlog := make([]NotifyMessage, 0, len(dev.ring))
-	cutoff := time.Now().Add(-notifyBacklogMaxAge)
-	for _, m := range dev.ring {
-		if hasAfter {
-			if m.Seq > after {
-				backlog = append(backlog, m)
+	if hasAfter {
+		for _, m := range dev.ring {
+			if m.Seq <= after {
+				continue
 			}
-			continue
-		}
-		if time.UnixMilli(m.TS).After(cutoff) {
+			if r.notify.isAcked(d.DeviceID, m.ID) {
+				continue
+			}
 			backlog = append(backlog, m)
 		}
 	}
@@ -498,6 +572,38 @@ func (r *Relay) handleNotifyAnswer(w http.ResponseWriter, req *http.Request) {
 
 // handleNotifyAnswers is the plugin's long poll (management credential).
 // GET /__dsh_tunnel__/notify/answers?wait=25
+// handleNotifyAck lets the phone confirm it rendered these cards.
+// POST /__dsh_tunnel__/notify/ack {ids:[...]} (device credential).
+// Acked ids are excluded from any later replay.
+func (r *Relay) handleNotifyAck(w http.ResponseWriter, req *http.Request) {
+	if !r.notifyEnabled(w) {
+		return
+	}
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	d := r.phones.lookup(phoneCred(req))
+	if d == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 8192)).Decode(&body); err != nil {
+		http.Error(w, "bad json body", http.StatusBadRequest)
+		return
+	}
+	if len(body.IDs) == 0 || len(body.IDs) > 64 {
+		http.Error(w, "ids must contain 1..64 items", http.StatusBadRequest)
+		return
+	}
+	r.notify.markAcked(d.DeviceID, body.IDs)
+	writeJSON(w, http.StatusOK, map[string]any{"acked": len(body.IDs)})
+}
+
 func (r *Relay) handleNotifyAnswers(w http.ResponseWriter, req *http.Request) {
 	if !r.notifyEnabled(w) {
 		return
@@ -542,6 +648,7 @@ func (r *Relay) handleNotifyOnline(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"v":        2,
 		"online":   r.notify.anyOnline(),
 		"watching": r.notify.anyWatching(),
 	})

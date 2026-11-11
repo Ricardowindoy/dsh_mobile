@@ -78,6 +78,11 @@ type Config struct {
 	// credential IS the subscription identity) and AccessToken (the
 	// plugin's management credential). Default off.
 	NotifyEnabled bool
+	// NotifySeqFile persists the notification plane's monotonic sequence.
+	// Empty = derive "<dir of PhoneDevicesFile>/notify-seq". The sequence must
+	// survive restarts: an in-memory counter reset makes every reconnect
+	// cursor invalid (and previously caused whole-ring replays).
+	NotifySeqFile string
 
 	// HeartbeatInterval, defaults to protocol.DefaultHeartbeatMs.
 	HeartbeatInterval time.Duration
@@ -195,7 +200,7 @@ func New(cfg Config) *Relay {
 		r.phones = pr
 		r.pairing = newPairingState()
 		if c.NotifyEnabled && c.AccessToken != "" {
-			r.notify = newNotifyHub()
+			r.notify = newNotifyHub(r.notifySeqFile())
 		}
 	}
 	r.server = &http.Server{
@@ -318,6 +323,7 @@ func (r *Relay) routes() http.Handler {
 	mux.HandleFunc("/__dsh_tunnel__/notify/answer", r.handleNotifyAnswer)
 	mux.HandleFunc("/__dsh_tunnel__/notify/answers", r.handleNotifyAnswers)
 	mux.HandleFunc("/__dsh_tunnel__/notify/online", r.handleNotifyOnline)
+	mux.HandleFunc("/__dsh_tunnel__/notify/ack", r.handleNotifyAck)
 	updates := update.NewHandler(r.cfg.UpdatesDir, r.log)
 	mux.HandleFunc("/__dsh_tunnel__/update/check", updates.Check)
 	mux.HandleFunc("/__dsh_tunnel__/update/download", updates.Download)
@@ -398,6 +404,17 @@ func withTunnelCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, req)
 	})
+}
+
+// notifySeqFile resolves where the notification sequence is persisted.
+func (r *Relay) notifySeqFile() string {
+	if r.cfg.NotifySeqFile != "" {
+		return r.cfg.NotifySeqFile
+	}
+	if r.cfg.PhoneDevicesFile != "" {
+		return filepath.Join(filepath.Dir(r.cfg.PhoneDevicesFile), "notify-seq")
+	}
+	return ""
 }
 
 // handleAppLog appends client-side logs pushed from the mobile app.

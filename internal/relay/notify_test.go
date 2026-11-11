@@ -149,7 +149,7 @@ func TestNotifyWatchSSE(t *testing.T) {
 		t.Fatalf("push = %d %q", pw.Code, pw.Body.String())
 	}
 
-	req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
+	req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+"&after=0", nil)
 	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestNotifyPushQuestionAndDoneCards(t *testing.T) {
 	// The ring replays both cards with their payload intact.
 	srv := httptest.NewServer(h)
 	defer srv.Close()
-	req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
+	req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+"&after=0", nil)
 	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -426,7 +426,7 @@ func TestNotifyWatchResumeCursor(t *testing.T) {
 		return out
 	}
 
-	first := readCards("", 2)
+	first := readCards("&after=0", 2)
 	if first[0].ID != "c1" || first[1].ID != "c2" || first[0].Seq == 0 || first[1].Seq <= first[0].Seq {
 		t.Fatalf("initial replay = %+v", first)
 	}
@@ -437,96 +437,6 @@ func TestNotifyWatchResumeCursor(t *testing.T) {
 	}
 }
 
-// A fresh subscriber must not receive stale ring entries.
-// Mutation: drop the age cutoff → red (hours-old cards pop on app start).
-func TestNotifyWatchSkipsStaleBacklog(t *testing.T) {
-	r := notifyRelay(t)
-	h := r.Handler()
-	cookie := loginWithCode(t, h, mintCode(t, h))
-	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
-	var self struct {
-		DeviceID string `json:"deviceId"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &self)
-
-	oldTS := time.Now().Add(-2 * time.Hour).UnixMilli()
-	body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"stale","ts":` + strconv.FormatInt(oldTS, 10) + `}}`
-	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
-		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
-		t.Fatalf("push stale = %d", pw.Code)
-	}
-
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
-	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return // deadline hit with no data frame: pass
-		}
-		if strings.HasPrefix(line, "data: ") {
-			t.Fatalf("stale card replayed: %s", line)
-		}
-	}
-}
-
-// A cursor larger than anything this relay process issued comes from a previous
-// generation (seq is in-memory). Treating it as valid would silently starve the
-// phone until the app restarts.
-// Mutation: keep trusting the oversized cursor → red (no replay at all).
-func TestNotifyWatchCursorFromPreviousGeneration(t *testing.T) {
-	r := notifyRelay(t)
-	h := r.Handler()
-	cookie := loginWithCode(t, h, mintCode(t, h))
-	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
-	var self struct {
-		DeviceID string `json:"deviceId"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &self)
-
-	body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"approval","id":"fresh"}}`
-	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
-		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
-		t.Fatalf("push = %d", pw.Code)
-	}
-
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+"&after=999999", nil)
-	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
-	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			t.Fatal("fresh card not replayed with an out-of-range cursor")
-		}
-		if strings.HasPrefix(line, "data: ") {
-			var m NotifyMessage
-			_ = json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &m)
-			if m.ID == "fresh" {
-				return // pass
-			}
-		}
-	}
-}
-
-// `watching` is the claim gate: presence grace alone must not claim.
 func TestNotifyOnlineWatching(t *testing.T) {
 	r := notifyRelay(t)
 	h := r.Handler()
@@ -560,5 +470,135 @@ func TestNotifyOnlineWatching(t *testing.T) {
 	r.notify.mu.Unlock()
 	if on, watch := read(); !on || !watch {
 		t.Fatalf("live watcher: online=%v watching=%v, want true/true", on, watch)
+	}
+}
+
+// v2 semantics: a connection without a cursor gets NO history at all.
+// Mutation: replay the ring when `after` is absent → red (old cards flood in).
+func TestNotifyWatchNoReplayWithoutCursor(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"d-old","slot":"done:s"}}`
+	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push = %d", pw.Code)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
+	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return // deadline: no data frame, pass
+		}
+		if strings.HasPrefix(line, "data: ") {
+			t.Fatalf("history replayed without a cursor: %s", line)
+		}
+	}
+}
+
+// The sequence must survive a relay restart. A fresh hub over the same file
+// continues above the previous value.
+// Mutation: keep seq in memory only → red.
+func TestNotifySeqPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	seqFile := dir + "/notify-seq"
+	r1 := quietRelay(t, Config{
+		AccessToken: "admin-sekrit", PhoneDevicesFile: dir + "/phones.json",
+		NotifyEnabled: true, NotifySeqFile: seqFile,
+	})
+	h1 := r1.Handler()
+	cookie := loginWithCode(t, h1, mintCode(t, h1))
+	w := do(h1, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+	pushBody := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"a","slot":"s"}}`
+	if pw := do(h1, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(pushBody),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push = %d", pw.Code)
+	}
+	first := r1.notify.seq
+	if first == 0 {
+		t.Fatal("seq not assigned")
+	}
+
+	r2 := quietRelay(t, Config{
+		AccessToken: "admin-sekrit", PhoneDevicesFile: dir + "/phones.json",
+		NotifyEnabled: true, NotifySeqFile: seqFile,
+	})
+	if r2.notify.seq < first {
+		t.Fatalf("seq went backwards after restart: %d < %d", r2.notify.seq, first)
+	}
+	if pw := do(r2.Handler(), "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(pushBody),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push after restart = %d", pw.Code)
+	}
+	if r2.notify.seq <= first {
+		t.Fatalf("seq did not advance after restart: %d <= %d", r2.notify.seq, first)
+	}
+}
+
+// Acking a card removes it from later replays.
+// Mutation: ignore the ack table → red (acked cards replay forever).
+func TestNotifyAckStopsReplay(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	pushBody := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"ack-1","slot":"s"}}`
+	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(pushBody),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push = %d", pw.Code)
+	}
+	// Ack with the device credential.
+	aw := do(h, "POST", "/__dsh_tunnel__/notify/ack", strings.NewReader(`{"ids":["ack-1"]}`), nil, cookie)
+	if aw.Code != 200 {
+		t.Fatalf("ack = %d %q", aw.Code, aw.Body.String())
+	}
+	// Reconnect with the cursor that would otherwise replay it.
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+"&after=0", nil)
+	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		if strings.HasPrefix(line, "data: ") {
+			t.Fatalf("acked card replayed: %s", line)
+		}
 	}
 }
