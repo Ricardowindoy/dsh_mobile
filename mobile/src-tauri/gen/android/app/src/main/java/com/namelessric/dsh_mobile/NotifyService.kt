@@ -6,7 +6,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -63,6 +65,15 @@ class NotifyService : Service() {
   }
 
   private var wakeLock: PowerManager.WakeLock? = null
+  private val handler = Handler(Looper.getMainLooper())
+  private val renewWakeLock = object : Runnable {
+    override fun run() {
+      // 唤醒锁是 30 分钟租约，到期不会自动续。不续的话「后台常驻」会在
+      // 半小时后静默失效——正好是用户第二天发现收不到通知的那种场景。
+      acquireWakeLock()
+      handler.postDelayed(this, 25 * 60 * 1000L)
+    }
+  }
 
   /** 与 NotifyBridge 共用一个诊断文件，App 下次启动时随日志上传。 */
   private fun logLine(ctx: Context, msg: String) {
@@ -128,8 +139,18 @@ class NotifyService : Service() {
       .setOngoing(true)
       .setSilent(true)
       .build()
-    startForeground(NOTIFICATION_ID, notification)
+    try {
+      startForeground(NOTIFICATION_ID, notification)
+    } catch (e: Throwable) {
+      // 前台服务类型/权限不满足时系统会抛异常：不能让服务直接崩，留痕后退出。
+      logLine(this, "startForeground failed: ${e.message}")
+      Log.e(TAG, "startForeground failed: ${e.message}")
+      stopSelf()
+      return START_NOT_STICKY
+    }
     acquireWakeLock()
+    handler.removeCallbacks(renewWakeLock)
+    handler.postDelayed(renewWakeLock, 25 * 60 * 1000L)
     running = true
     logLine(this, "keepalive running wakeLock=${wakeLock?.isHeld == true}")
     Log.i(TAG, "keepalive running wakeLock=${wakeLock?.isHeld == true}")
@@ -138,6 +159,7 @@ class NotifyService : Service() {
 
   override fun onDestroy() {
     running = false
+    handler.removeCallbacks(renewWakeLock)
     releaseWakeLock()
     logLine(this, "keepalive stopped")
     Log.i(TAG, "keepalive stopped")

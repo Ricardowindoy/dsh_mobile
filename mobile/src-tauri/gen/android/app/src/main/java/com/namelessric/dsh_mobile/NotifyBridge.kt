@@ -97,6 +97,13 @@ object NotifyBridge {
     } else "n/a"
     val enabled = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
     logLine(ctx, "start perm=$permState notificationsEnabled=$enabled")
+    // 先确保前台服务在跑：notify_start 可能被调用多次（每次连接都会调），
+    // 而 `started` 早退会跳过服务重启——服务曾被杀掉时，重连也救不回来。
+    NotifyService.start(ctx)
+    // Doze 会掐断后台网络：首次启动时请求一次「忽略电池优化」，否则前台服务
+    // 也保不住 SSE（用户实测：切前台才补弹通知）。
+    requestIgnoreBatteryOptimizations(context, ctx)
+    logLine(ctx, "keepalive start requested running=${NotifyService.running}")
     if (started) return
     started = true
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -107,12 +114,6 @@ object NotifyBridge {
       }
       nm.createNotificationChannel(channel)
     }
-    // 常驻前台服务：让 SSE 订阅在 App 切后台后继续存活（v1.0.15）。
-    NotifyService.start(ctx)
-    // Doze 会掐断后台网络：首次启动时请求一次「忽略电池优化」，否则前台服务
-    // 也保不住 SSE（用户实测：切前台才补弹通知）。
-    requestIgnoreBatteryOptimizations(context, ctx)
-    logLine(ctx, "keepalive start requested running=${NotifyService.running}")
     Log.i(TAG, "started")
   }
 
@@ -131,7 +132,11 @@ object NotifyBridge {
   /** JNI 入口：一条 SSE 消息（JSON 原文）。kind=approval|question|done|retract。 */
   @JvmStatic
   fun onCard(json: String) {
-    if (!started) return
+    if (!started) {
+      // 桥没初始化就收到卡片：以前静默丢弃，排查时完全看不见。
+      appContext?.let { logLine(it, "card dropped (bridge not started)") }
+      return
+    }
     val ctx = appContext ?: return
     executor.execute {
       try {

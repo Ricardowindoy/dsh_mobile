@@ -10,9 +10,9 @@
 
 #![cfg(target_os = "android")]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tauri::async_runtime::JoinHandle;
@@ -31,6 +31,11 @@ struct NotifySlot {
 }
 
 static SLOT: OnceLock<NotifySlot> = OnceLock::new();
+
+/// 最后处理的 relay seq，跨 `notify_start` 调用保留（进程级）。
+/// 没有它，每次 stop/start 都会以「无游标」重连，relay 会把最近 10 分钟的
+/// 卡片再补投一遍（重复通知）。
+static LAST_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn slot() -> &'static NotifySlot {
     SLOT.get_or_init(|| NotifySlot {
@@ -89,7 +94,7 @@ pub async fn notify_start(
         // 断点续传：记住最后收到的 seq，重连时带 ?after=N，relay 只补投之后
         // 的卡。没有它每次重连都会重放整个环形缓冲（用户实测：隔了两小时
         // 重连，一堆旧通知同时弹出）。0 = 首次连接，由 relay 按时间窗截断。
-        let mut last_seq: u64 = 0;
+        let mut last_seq: u64 = LAST_SEQ.load(Ordering::Relaxed);
         while !stop.load(Ordering::SeqCst) {
             let url = if last_seq == 0 {
                 base_url.clone()
@@ -104,8 +109,15 @@ pub async fn notify_start(
                 .await
             {
                 Ok(resp) if resp.status().is_success() => {
-                    backoff = Duration::from_secs(1);
+                    let connected_at = Instant::now();
+                    let before = last_seq;
                     last_seq = last_seq.max(consume_sse(resp, &stop).await);
+                    LAST_SEQ.store(last_seq, Ordering::Relaxed);
+                    // 只有连接稳定存活过、或确实收到过新卡片，才把退避重置为 1s。
+                    // 否则「连上就被踢」会变成 1s 一次的忙循环，把 relay 打爆。
+                    if connected_at.elapsed() >= Duration::from_secs(5) || last_seq > before {
+                        backoff = Duration::from_secs(1);
+                    }
                 }
                 Ok(resp) => {
                     eprintln!("[dsh-notify] watch HTTP {}", resp.status());

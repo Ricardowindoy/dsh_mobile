@@ -155,6 +155,22 @@ func (h *notifyHub) anyOnline() bool {
 	return false
 }
 
+// anyWatching reports whether a phone currently has a live SSE channel. This
+// is stricter than anyOnline(): presence keeps a 90s grace window, but a card
+// pushed into that window reaches nobody. The claim gate must use this one —
+// claiming an approval for a phone that is not actually listening turns into
+// an automatic rejection after the timeout.
+func (h *notifyHub) anyWatching() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, d := range h.devices {
+		if len(d.watchers) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // enqueueAnswer records a decision once. A replayed/unknown id is refused by
 // the plugin's pending table; here the gate is the closed decision set and
 // the queue bound.
@@ -314,6 +330,13 @@ func (r *Relay) handleNotifyWatch(w http.ResponseWriter, req *http.Request) {
 	dev := r.notify.device(d.DeviceID)
 	dev.watchers[ch] = struct{}{}
 	dev.lastSeen = time.Now()
+	// A cursor from a previous relay generation is larger than anything this
+	// process has issued (seq is in-memory and restarts at 0). Treat it as no
+	// cursor: otherwise `m.Seq > after` is never true and the phone would
+	// silently receive nothing until the app restarts.
+	if hasAfter && after > r.notify.seq {
+		hasAfter = false
+	}
 	backlog := make([]NotifyMessage, 0, len(dev.ring))
 	cutoff := time.Now().Add(-notifyBacklogMaxAge)
 	for _, m := range dev.ring {
@@ -518,5 +541,8 @@ func (r *Relay) handleNotifyOnline(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"online": r.notify.anyOnline()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"online":   r.notify.anyOnline(),
+		"watching": r.notify.anyWatching(),
+	})
 }

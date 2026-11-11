@@ -478,3 +478,87 @@ func TestNotifyWatchSkipsStaleBacklog(t *testing.T) {
 		}
 	}
 }
+
+// A cursor larger than anything this relay process issued comes from a previous
+// generation (seq is in-memory). Treating it as valid would silently starve the
+// phone until the app restarts.
+// Mutation: keep trusting the oversized cursor → red (no replay at all).
+func TestNotifyWatchCursorFromPreviousGeneration(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"approval","id":"fresh"}}`
+	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push = %d", pw.Code)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+"&after=999999", nil)
+	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal("fresh card not replayed with an out-of-range cursor")
+		}
+		if strings.HasPrefix(line, "data: ") {
+			var m NotifyMessage
+			_ = json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &m)
+			if m.ID == "fresh" {
+				return // pass
+			}
+		}
+	}
+}
+
+// `watching` is the claim gate: presence grace alone must not claim.
+func TestNotifyOnlineWatching(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	admin := map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}
+
+	read := func() (online, watching bool) {
+		w := do(h, "GET", "/__dsh_tunnel__/notify/online", nil, admin)
+		var out struct {
+			Online   bool `json:"online"`
+			Watching bool `json:"watching"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out.Online, out.Watching
+	}
+
+	if on, watch := read(); on || watch {
+		t.Fatalf("empty hub: online=%v watching=%v", on, watch)
+	}
+	// Presence without a live channel: online=true (90s grace), watching=false.
+	r.notify.mu.Lock()
+	r.notify.device("ph_x").lastSeen = time.Now()
+	r.notify.mu.Unlock()
+	if on, watch := read(); !on || watch {
+		t.Fatalf("presence-only: online=%v watching=%v, want true/false", on, watch)
+	}
+	// A live watcher flips both.
+	r.notify.mu.Lock()
+	d := r.notify.device("ph_x")
+	ch := make(chan NotifyMessage, 1)
+	d.watchers[ch] = struct{}{}
+	r.notify.mu.Unlock()
+	if on, watch := read(); !on || !watch {
+		t.Fatalf("live watcher: online=%v watching=%v, want true/true", on, watch)
+	}
+}
