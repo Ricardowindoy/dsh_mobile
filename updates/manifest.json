@@ -3,11 +3,11 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.16",
+            "version": "1.0.17",
             "filename": "app-arm64-release.apk",
-            "size": 7433202,
-            "sha256": "64629d777bbaebef2e9d7adfb14cfe651ed4678c28f2cdddd0cbe69fe2cb15b0",
-            "releaseNote": "1.0.16 通知体验修复：中断/出错通知、一句话摘要、每会话一个通知槽",
+            "size": 7433192,
+            "sha256": "ff95f9ddd4d318452ab452614312e3c2e60bb84517c6fdfe2d9f619455586394",
+            "releaseNote": "1.0.17 修复选 Gitee 源后检测不到更新",
             "releaseAt": "2026-11-11",
             "force": false
         },
