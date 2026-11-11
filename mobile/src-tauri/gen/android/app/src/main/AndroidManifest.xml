@@ -11,6 +11,10 @@
     <!-- 常驻前台服务：保持 SSE 订阅在 App 切后台后存活（v1.0.15） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 保持 CPU 可运行：Doze 下前台服务仍可能被掐网络，需 partial wakelock -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 后台常驻：请求用户把本应用加入「不省电」名单，否则 Doze 会掐断 SSE -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

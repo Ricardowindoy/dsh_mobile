@@ -9,6 +9,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import android.os.Build
 import android.util.Log
 import androidx.core.app.ActivityCompat
@@ -101,6 +104,9 @@ object NotifyBridge {
     }
     // 常驻前台服务：让 SSE 订阅在 App 切后台后继续存活（v1.0.15）。
     NotifyService.start(ctx)
+    // Doze 会掐断后台网络：首次启动时请求一次「忽略电池优化」，否则前台服务
+    // 也保不住 SSE（用户实测：切前台才补弹通知）。
+    requestIgnoreBatteryOptimizations(context, ctx)
     logLine(ctx, "keepalive start requested running=${NotifyService.running}")
     Log.i(TAG, "started")
   }
@@ -146,6 +152,37 @@ object NotifyBridge {
       } catch (e: Exception) {
         Log.w(TAG, "onCard: ${e.message}")
       }
+    }
+  }
+
+  /**
+   * 请求把应用加入电池优化白名单（一次性）。
+   *
+   * Android 的 Doze 对「非白名单应用」会推迟网络访问——前台服务并不能完全
+   * 豁免。不申请的话，App 挂后台一段时间后 SSE 必然断，表现就是「切回前台
+   * 才一次性弹出所有通知」。系统会弹一次确认框，用户拒绝也能继续用（只是
+   * 后台可靠性差），不阻塞任何流程。
+   */
+  private fun requestIgnoreBatteryOptimizations(context: Context, appCtx: Context) {
+    try {
+      val pm = appCtx.getSystemService(Context.POWER_SERVICE) as PowerManager
+      if (pm.isIgnoringBatteryOptimizations(appCtx.packageName)) return
+      val prefs = appCtx.getSharedPreferences("dsh-notify", Context.MODE_PRIVATE)
+      if (prefs.getBoolean("batteryPromptDone", false)) return
+      val activity = context as? Activity ?: return
+      prefs.edit().putBoolean("batteryPromptDone", true).apply()
+      activity.runOnUiThread {
+        try {
+          activity.startActivity(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+              Uri.parse("package:${appCtx.packageName}")),
+          )
+        } catch (e: Throwable) {
+          logLine(appCtx, "battery prompt failed: ${e.message}")
+        }
+      }
+    } catch (e: Throwable) {
+      logLine(appCtx, "battery prompt error: ${e.message}")
     }
   }
 

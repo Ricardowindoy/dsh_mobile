@@ -139,8 +139,20 @@ fn notify_stop_inner() {
 /// SSE 帧解析：`data: {json}\n\n`；`: ping` 注释行忽略。
 async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
     let mut buf = String::new();
+    // 读空闲看门狗：服务端每 20s 一个 `: ping`，75s 收不到任何字节就判定
+    // 这条连接已死（切后台/换网时 NAT 超时很常见，TCP 不会立刻报错，
+    // `chunk()` 会永远挂着）。没有它 → 订阅静默失效，只有切回前台才恢复。
+    const IDLE_LIMIT: Duration = Duration::from_secs(75);
     while !stop.load(Ordering::SeqCst) {
-        match resp.chunk().await {
+        let next = tokio::time::timeout(IDLE_LIMIT, resp.chunk()).await;
+        let chunk_result = match next {
+            Ok(r) => r,
+            Err(_) => {
+                eprintln!("[dsh-notify] watch idle {}s, reconnecting", IDLE_LIMIT.as_secs());
+                return;
+            }
+        };
+        match chunk_result {
             Ok(Some(chunk)) => {
                 buf.push_str(&String::from_utf8_lossy(&chunk));
                 while let Some(pos) = buf.find("\n\n") {
