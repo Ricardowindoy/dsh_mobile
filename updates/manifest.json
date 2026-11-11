@@ -3,11 +3,11 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.20",
+            "version": "1.0.21",
             "filename": "app-arm64-release.apk",
-            "size": 7451414,
-            "sha256": "a3f8cb5d49f1917ebdf5cff14e585ffbf8d9ee429282098b723ca7f875d5cad6",
-            "releaseNote": "1.0.20 点通知跳到对应会话 + 通知链路 review 修复",
+            "size": 7451423,
+            "sha256": "50dadc294a134f459727757f33f231fe4af335d3eec918a0f828f24070479045",
+            "releaseNote": "1.0.21 修复点通知不跳会话（WebView 缓存）",
             "releaseAt": "2026-11-12",
             "force": false
         },
