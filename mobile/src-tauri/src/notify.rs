@@ -318,3 +318,41 @@ pub extern "system" fn Java_com_namelessric_dsh_1mobile_NotifyBridge_nativeAnswe
         }
     });
 }
+
+/// Kotlin AnswerReceiver 的结构化提问应答：answersJson 为
+/// `[{"id":"scope","selected":["方案 A"]}]`。与审批应答走同一个 relay 端点，
+/// 但载荷是 answers 数组而不是 decision —— relay 侧要求二者恰有其一。
+#[no_mangle]
+pub extern "system" fn Java_com_namelessric_dsh_1mobile_NotifyBridge_nativeAnswerJson(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    id: jni::objects::JString,
+    answers_json: jni::objects::JString,
+) {
+    let Ok(id) = env.get_string(&id).map(|s| s.to_string_lossy().into_owned()) else { return };
+    let Ok(raw) = env.get_string(&answers_json).map(|s| s.to_string_lossy().into_owned()) else { return };
+    // Validate before sending: the relay also validates, but a malformed local
+    // payload would otherwise be rejected silently at the far end.
+    let Ok(answers) = serde_json::from_str::<Value>(&raw) else {
+        eprintln!("[dsh-notify] question answer is not JSON");
+        return;
+    };
+    if !answers.is_array() {
+        eprintln!("[dsh-notify] question answer must be an array");
+        return;
+    }
+    let Some(conn) = slot().conn.lock().unwrap().clone() else { return };
+    tauri::async_runtime::spawn(async move {
+        let Ok(client) = crate::relay_client(&conn.relay_url) else { return };
+        let resp = client
+            .post(format!("{}/__dsh_tunnel__/notify/answer", conn.relay_url))
+            .header("X-DSH-Relay-Token", &conn.device_token)
+            .json(&json!({"id": id, "answers": answers}))
+            .send()
+            .await;
+        match resp {
+            Ok(r) => eprintln!("[dsh-notify] question answer HTTP {}", r.status()),
+            Err(e) => eprintln!("[dsh-notify] question answer failed: {e}"),
+        }
+    });
+}

@@ -8,6 +8,9 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- 审批推送卡片（Android 13+ 运行时申请；拒绝则降级 App 内提示） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 常驻前台服务：保持 SSE 订阅在 App 切后台后存活（v1.0.15） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -49,5 +52,15 @@
         <receiver
           android:name=".NotifyBridge$AnswerReceiver"
           android:exported="false" />
+
+        <!-- 通知订阅常驻：前台服务 + specialUse 类型（本机自用侧载，不进 Play 审核） -->
+        <service
+            android:name=".NotifyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the paired phone subscribed to the user's own DSH relay so approval, question and completion cards arrive in real time." />
+        </service>
     </application>
 </manifest>

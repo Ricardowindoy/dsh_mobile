@@ -15,6 +15,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -37,6 +38,8 @@ object NotifyBridge {
   private const val ACTION_ANSWER = "com.namelessric.dsh_mobile.NOTIFY_ANSWER"
   private const val EXTRA_ID = "id"
   private const val EXTRA_DECISION = "decision"
+  /** Structured question answer as JSON: [{"id":"scope","selected":["方案 A"]}]. */
+  private const val EXTRA_ANSWERS = "answersJson"
 
   private val executor = Executors.newSingleThreadExecutor()
   private val cards = ConcurrentHashMap<String, JSONObject>()
@@ -55,6 +58,9 @@ object NotifyBridge {
 
   // Rust 实现的应答发送（reqwest + 私有 CA + 设备 token header）。
   external fun nativeAnswer(id: String, decision: String)
+
+  // Rust 实现的结构化提问应答（question 卡的一键选项）。
+  external fun nativeAnswerJson(id: String, answersJson: String)
 
   /** JNI 入口：Rust notify_start 调用。 */
   @JvmStatic
@@ -93,6 +99,9 @@ object NotifyBridge {
       }
       nm.createNotificationChannel(channel)
     }
+    // 常驻前台服务：让 SSE 订阅在 App 切后台后继续存活（v1.0.15）。
+    NotifyService.start(ctx)
+    logLine(ctx, "keepalive start requested running=${NotifyService.running}")
     Log.i(TAG, "started")
   }
 
@@ -104,10 +113,11 @@ object NotifyBridge {
     val nm = NotificationManagerCompat.from(ctx)
     for (id in cards.keys) nm.cancel(id.hashCode())
     cards.clear()
+    NotifyService.stop(ctx)
     Log.i(TAG, "stopped")
   }
 
-  /** JNI 入口：一条 SSE 消息（JSON 原文）。kind=approval|question|retract。 */
+  /** JNI 入口：一条 SSE 消息（JSON 原文）。kind=approval|question|done|retract。 */
   @JvmStatic
   fun onCard(json: String) {
     if (!started) return
@@ -127,6 +137,11 @@ object NotifyBridge {
             logLine(ctx, "card kind=${msg.optString("kind")} id=$id tool=${msg.optString("toolName")}")
             showCard(ctx, id, msg)
           }
+          "done" -> {
+            // 完成卡是提示，不是待办：不进 cards（无需 retract），也不带 action。
+            logLine(ctx, "card kind=done id=$id title=${msg.optString("title")}")
+            showCard(ctx, id, msg)
+          }
         }
       } catch (e: Exception) {
         Log.w(TAG, "onCard: ${e.message}")
@@ -138,9 +153,21 @@ object NotifyBridge {
     val kind = msg.optString("kind")
     val tool = msg.optString("toolName")
     val reason = msg.optString("reason")
-    val title = if (kind == "approval") "审批等待：$tool" else "dsh 有新提问"
-    // 隐私规则：question 卡不带问题文本（reason 字段对 question 恒空）。
-    val text = if (kind == "approval" && reason.isNotEmpty()) reason else "点击查看并处理"
+    val sessionTitle = msg.optString("title")
+    val question = msg.optString("question")
+    val preview = msg.optString("preview")
+
+    // 会话标题优先放进标题行，让锁屏上就能分辨是哪个会话。
+    val title = when (kind) {
+      "approval" -> if (sessionTitle.isNotEmpty()) "审批 · $sessionTitle" else "审批等待：$tool"
+      "question" -> if (sessionTitle.isNotEmpty()) "提问 · $sessionTitle" else "dsh 有新提问"
+      else -> if (sessionTitle.isNotEmpty()) "完成 · $sessionTitle" else "dsh 已完成"
+    }
+    val text = when (kind) {
+      "approval" -> reason.ifEmpty { "点击查看并处理" }
+      "question" -> question.ifEmpty { "点击查看并处理" }
+      else -> preview.ifEmpty { "点击查看结果" }
+    }
 
     val open = Intent(ctx, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -165,6 +192,20 @@ object NotifyBridge {
     if (kind == "approval") {
       builder.addAction(0, "允许一次", answerPi(ctx, id, "allowed-once"))
       builder.addAction(0, "拒绝", answerPi(ctx, id, "rejected"))
+    } else if (kind == "question") {
+      // 一键选项：插件只在「单题、单选、1..3 个选项」时下发 options；
+      // 其余提问 options 为空，点击卡片进 App 里作答。
+      val qid = msg.optString("questionId")
+      val opts = msg.optJSONArray("options")
+      if (qid.isNotEmpty() && opts != null) {
+        for (i in 0 until minOf(opts.length(), 3)) {
+          val label = opts.optString(i)
+          if (label.isNotEmpty()) {
+            val shown = if (label.length <= 24) label else label.take(24) + "…"
+            builder.addAction(0, shown, questionAnswerPi(ctx, id, qid, label))
+          }
+        }
+      }
     }
 
     try {
@@ -185,12 +226,41 @@ object NotifyBridge {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
   }
 
+  /** One-tap question action: structured answer for a single question id. */
+  private fun questionAnswerPi(ctx: Context, id: String, qid: String, label: String): PendingIntent {
+    val answers = JSONArray().put(
+      JSONObject().put("id", qid).put("selected", JSONArray().put(label)),
+    ).toString()
+    val intent = Intent(ctx, AnswerReceiver::class.java).apply {
+      action = ACTION_ANSWER
+      putExtra(EXTRA_ID, id)
+      putExtra(EXTRA_ANSWERS, answers)
+    }
+    return PendingIntent.getBroadcast(ctx, (id + qid + label).hashCode(), intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+  }
+
   /** action 按钮接收器：撤卡 → 交 Rust 发应答 → 结果更新为已处理提示。 */
   class AnswerReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
       if (intent.action != ACTION_ANSWER) return
       val id = intent.getStringExtra(EXTRA_ID) ?: return
-      val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
+      val answers = intent.getStringExtra(EXTRA_ANSWERS)
+      val decision = intent.getStringExtra(EXTRA_DECISION)
+      // Exactly one answer shape, mirroring the relay gate: structured question
+      // answers, or an approval decision from the closed set.
+      if (answers != null) {
+        cards.remove(id)
+        NotificationManagerCompat.from(context).cancel(id.hashCode())
+        executor.execute {
+          try {
+            nativeAnswerJson(id, answers)
+          } catch (e: Exception) {
+            Log.w(TAG, "question answer failed: ${e.message}")
+          }
+        }
+        return
+      }
       if (decision != "allowed-once" && decision != "rejected") return
       cards.remove(id)
       NotificationManagerCompat.from(context).cancel(id.hashCode())
