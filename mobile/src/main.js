@@ -16,6 +16,7 @@ import {
   giteeUpdateFromRelease,
   parseChecksum,
   normalizeSource,
+  pickLatestGiteeRelease,
 } from "./update-source.js";
 import { pctOf, progressLabel } from "./update-progress.js";
 
@@ -351,8 +352,8 @@ async function checkGiteeUpdate() {
     headers: { Accept: "application/json" },
   });
   if (!resp.ok) throw new Error(`Gitee HTTP ${resp.status}`);
-  const arr = await resp.json();
-  const release = Array.isArray(arr) ? arr[0] : null;
+  // 按版本挑最大，不能取 arr[0]：Gitee 列表是升序（最旧在前）。
+  const release = pickLatestGiteeRelease(await resp.json());
   if (!release) return null; // 该源暂无 release → 无更新
   const update = giteeUpdateFromRelease(release, current);
   return update ? fillChecksum(update, UPDATE_GITEE_TIMEOUT_MS) : null;

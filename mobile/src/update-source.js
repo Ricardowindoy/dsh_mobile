@@ -15,7 +15,10 @@ export const GITHUB_RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/
 // ⚠️ Gitee 目前没有发布 release（releases 返回空数组）→ 选中时优雅报「无更新」，
 // 一旦在 Gitee 上发布 Release（资产名同为 app-arm64-release.apk）即可直接生效。
 export const GITEE_REPO = "namelessRic/dsh_mobile";
-export const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases?page=1&per_page=1`;
+// ⚠️ per_page 必须拉一整页再自己挑最大版本：Gitee 的 releases 列表是
+// **按创建时间升序**返回的（v1.0.13 → v1.0.16），`per_page=1` 拿到的是
+// 最旧的一条，会让「选 Gitee」永远判定为已是最新（2026-11-11 实测踩坑）。
+export const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases?page=1&per_page=100`;
 
 // 可选下载源（与 UI 下拉一一对应，也是持久化偏好的合法值）。
 export const UPDATE_SOURCES = ["gitee", "github", "relay"];
@@ -119,6 +122,34 @@ export function giteeUpdateFromRelease(release, currentVersion) {
     source: "gitee",
     checksumUrl: sha?.browser_download_url || "",
   };
+}
+
+/**
+ * Pick the highest-version release out of a Gitee release list.
+ *
+ * Gitee's `/releases` endpoint returns releases in **ascending creation
+ * order**, so taking `arr[0]` returns the OLDEST release. That made the
+ * "download from Gitee" preference permanently report "already up to date"
+ * (the oldest tag never beats the installed version). Select by version
+ * instead of by position so the result is order-independent.
+ *
+ * @param releases - raw list from the Gitee API.
+ * @returns the release with the highest normalizable tag, or null.
+ */
+export function pickLatestGiteeRelease(releases) {
+  const list = Array.isArray(releases) ? releases : [];
+  let best = null;
+  let bestVersion = "";
+  for (const release of list) {
+    if (!release || typeof release !== "object") continue;
+    const version = normalizeVersion(release.tag_name || release.name || "");
+    if (!version) continue;
+    if (best === null || compareVersions(version, bestVersion) > 0) {
+      best = release;
+      bestVersion = version;
+    }
+  }
+  return best;
 }
 
 /** 从 .sha256 文件里取第一段 64 位 hex。 */
