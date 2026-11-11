@@ -3,12 +3,12 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.0",
+            "version": "1.0.13",
             "filename": "app-arm64-release.apk",
-            "size": 7970358,
-            "sha256": "a47677fca2f7dc80bedb37eff3373ba53ea6bcbaacefc01ba0f6ba74e02d822a",
-            "releaseNote": "1.0.0 扫码配对 + 审批推送 + 多节点 + 更新通道（GitHub Release 优先，relay 兜底）",
-            "releaseAt": "2026-11-10",
+            "size": 7422958,
+            "sha256": "70fee4a95d31bbe5db750cc65ca2919d9322d8d82b51f94a73601e745a9033af",
+            "releaseNote": "1.0.13 更新卡片新增下载源下拉（gitee/github/relay，记住偏好）；修复已知的下载源不可达导致无法下载",
+            "releaseAt": "2026-11-11",
             "force": false
         },
         {
