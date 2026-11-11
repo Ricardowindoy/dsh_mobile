@@ -3,11 +3,11 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.17",
+            "version": "1.0.18",
             "filename": "app-arm64-release.apk",
-            "size": 7433192,
-            "sha256": "ff95f9ddd4d318452ab452614312e3c2e60bb84517c6fdfe2d9f619455586394",
-            "releaseNote": "1.0.17 修复选 Gitee 源后检测不到更新",
+            "size": 7433809,
+            "sha256": "9913463fcb3df50513abe30db0e459c4211bbf23e1225c461efd310b2f12f1e3",
+            "releaseNote": "1.0.18 修复后台收不到通知（SSE 看门狗 + wakelock + 电池优化白名单）",
             "releaseAt": "2026-11-11",
             "force": false
         },
