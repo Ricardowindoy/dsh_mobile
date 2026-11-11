@@ -54,6 +54,9 @@ type NotifyMessage struct {
 	MultiSelect bool     `json:"multiSelect,omitempty"`
 	// Preview is the clipped last assistant text on a completion card.
 	Preview string `json:"preview,omitempty"`
+	// Status distinguishes a normal completion from an interrupted/failed
+	// turn on the same `done` kind: completed | interrupted | error | blocked.
+	Status string `json:"status,omitempty"`
 }
 
 // QuestionAnswerItem mirrors the harness's AskUserQuestionAnswerItem shape:

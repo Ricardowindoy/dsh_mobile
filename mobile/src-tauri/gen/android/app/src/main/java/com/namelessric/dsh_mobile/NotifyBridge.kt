@@ -156,17 +156,30 @@ object NotifyBridge {
     val sessionTitle = msg.optString("title")
     val question = msg.optString("question")
     val preview = msg.optString("preview")
+    val status = msg.optString("status")
 
     // 会话标题优先放进标题行，让锁屏上就能分辨是哪个会话。
+    // 中断/出错/阻塞与正常完成共用 done 通道，靠 status 区分措辞。
+    val doneLabel = when (status) {
+      "interrupted" -> "已中断"
+      "error" -> "出错"
+      "blocked" -> "被阻塞"
+      else -> "完成"
+    }
     val title = when (kind) {
       "approval" -> if (sessionTitle.isNotEmpty()) "审批 · $sessionTitle" else "审批等待：$tool"
       "question" -> if (sessionTitle.isNotEmpty()) "提问 · $sessionTitle" else "dsh 有新提问"
-      else -> if (sessionTitle.isNotEmpty()) "完成 · $sessionTitle" else "dsh 已完成"
+      else -> if (sessionTitle.isNotEmpty()) "$doneLabel · $sessionTitle" else "dsh $doneLabel"
     }
     val text = when (kind) {
       "approval" -> reason.ifEmpty { "点击查看并处理" }
       "question" -> question.ifEmpty { "点击查看并处理" }
-      else -> preview.ifEmpty { "点击查看结果" }
+      else -> preview.ifEmpty { when (status) {
+        "interrupted" -> "会话已中断"
+        "error" -> "本轮执行出错"
+        "blocked" -> "本轮被阻塞"
+        else -> "点击查看结果"
+      } }
     }
 
     val open = Intent(ctx, MainActivity::class.java).apply {
