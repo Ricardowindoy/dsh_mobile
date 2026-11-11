@@ -38,3 +38,12 @@
 -keep class com.namelessric.dsh_mobile.InstallBridge { *; }
 -keep class com.namelessric.dsh_mobile.ClipboardBridge { *; }
 -keep class com.namelessric.dsh_mobile.StatusBarThemeTask { *; }
+# 审批/提问通知卡片桥（WP4c）：start/stop/onCard 只由 Rust notify.rs 经 JNI
+# CallStaticVoidMethod("start"/"onCard"/"stop") 按名字反射调用，Kotlin/Java 侧
+# 没有任何调用点。release 开 R8 时这些静态方法会被当死代码删除，只留
+# <clinit> 与 nativeAnswer（后者另有 native <methods> 规则保住）→ JNI 抛
+# NoSuchMethodError 被 exception_clear() 吞掉，表现为「卡片 delivered:1 但
+# 手机不弹」。实测 v1.0.13 装机 APK dex 中 NotifyBridge 仅 [<clinit>,
+# nativeAnswer]，而同 APK 内被 keep 的 InstallBridge 方法齐全，故必须显式保活。
+-keep class com.namelessric.dsh_mobile.NotifyBridge { *; }
+-keep class com.namelessric.dsh_mobile.NotifyBridge$AnswerReceiver { *; }

@@ -66,7 +66,11 @@ pub async fn notify_start(
     }
 
     // Kotlin 侧初始化通知渠道（经既有 JNI 桥拿 Activity）。
-    init_kotlin();
+    // 失败必须让前端知道：以前这里吞掉 JNI 异常仍返回 Ok，导致
+    // 「notify subscription started」是假成功（R8 裁掉 start 后实测）。
+    if let Err(e) = init_kotlin() {
+        return Err(format!("通知渠道初始化失败: {e}"));
+    }
 
     let handle = tauri::async_runtime::spawn(async move {
         let client = match crate::relay_client(&conn.relay_url) {
@@ -117,7 +121,10 @@ pub async fn notify_start(
 #[tauri::command]
 pub async fn notify_stop() -> Result<Value, String> {
     notify_stop_inner();
-    kotlin_stop();
+    if let Err(e) = kotlin_stop() {
+        // 停订阅仍算成功（旧任务已 abort），但失败要留痕，别静默吞。
+        eprintln!("[dsh-notify] kotlin_stop failed: {e}");
+    }
     Ok(json!({"stopped": true}))
 }
 
@@ -141,7 +148,10 @@ async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
                     buf.drain(..pos + 2);
                     for line in frame.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
-                            push_to_kotlin(data);
+                            if let Err(e) = push_to_kotlin(data) {
+                                // 卡片送达 relay 不等于手机弹卡：JNI 失败必须可观测。
+                                eprintln!("[dsh-notify] onCard failed: {e}");
+                            }
                         }
                     }
                 }
@@ -168,55 +178,115 @@ fn urlencode(s: &str) -> String {
 
 // ── JNI 桥 ────────────────────────────────────────────────────────────
 
-fn with_activity<F: FnOnce(&mut jni::JNIEnv, &jni::objects::JObject)>(f: F) {
-    let Some(vm) = crate::android_bridge::VM.get() else { return };
-    let Some(activity) = crate::android_bridge::ACTIVITY.get() else { return };
-    let Ok(mut env) = vm.attach_current_thread() else { return };
-    f(&mut env, activity.as_obj());
+/// JNI 桥调用结果：失败必须带原因，不能静默 `return`。
+/// （2026-11-11 实测：release 包 R8 删掉 NotifyBridge.start 后，JNI 抛
+/// NoSuchMethodError 被 exception_clear() 吞掉，notify_start 仍返回 Ok，
+/// 排查时误判为「订阅成功」。判据必须落在可观测结果上。）
+type JniResult<T> = Result<T, String>;
+
+/// 取出并清掉 JNI 挂起异常；复用 lib.rs 的 helper 拿类名+message。
+fn take_jni_exception(env: &mut jni::JNIEnv) -> String {
+    let detail = crate::jni_pending_exception(env);
+    // helper 已 clear；这里再兜一次，确保没有残留挂起异常让 ART 抛回 Java。
+    let _ = env.exception_clear();
+    detail.unwrap_or_else(|| "unknown JNI exception".into())
+}
+
+fn with_activity<F, T>(f: F) -> JniResult<T>
+where
+    F: FnOnce(&mut jni::JNIEnv, &jni::objects::JObject) -> JniResult<T>,
+{
+    let vm = crate::android_bridge::VM
+        .get()
+        .ok_or_else(|| "JavaVM 未初始化（nativeInitBridge 未调用？）".to_string())?;
+    let activity = crate::android_bridge::ACTIVITY
+        .get()
+        .ok_or_else(|| "Activity 全局引用缺失".to_string())?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach JVM 失败: {e}"))?;
+    let result = f(&mut env, activity.as_obj());
     // ⚠️ JNI 调用失败会在环境里留下 pending exception；不清掉的话，控制权
     // 回到 Java 时 ART 会把它抛出来，进程无征兆死亡（v1.0.9 实测：配对成功
     // 后 connect() 里第一次 notify_start → 进程 2 秒内被杀，用户看到"切后台"）。
     let _ = env.exception_clear();
+    result
 }
 
 /// 取 NotifyBridge 类。attached 线程的 FindClass 只走系统 classloader，
 /// 应用类必须用启动时缓存的全局引用（见 android_bridge::NOTIFY_CLASS）。
-fn notify_bridge_class<'a>(env: &mut jni::JNIEnv<'a>) -> Option<jni::objects::JClass<'a>> {
-    let global = crate::android_bridge::NOTIFY_CLASS.get()?;
-    let local = env.new_local_ref(global.as_obj()).ok()?;
-    Some(jni::objects::JClass::from(local))
+fn notify_bridge_class<'a>(
+    env: &mut jni::JNIEnv<'a>,
+) -> JniResult<jni::objects::JClass<'a>> {
+    let global = crate::android_bridge::NOTIFY_CLASS
+        .get()
+        .ok_or_else(|| "NotifyBridge 类全局引用缺失（nativeInitBridge 未缓存？）".to_string())?;
+    let local = env
+        .new_local_ref(global.as_obj())
+        .map_err(|e| format!("NotifyBridge 类引用失效: {e}"))?;
+    Ok(jni::objects::JClass::from(local))
 }
 
-fn init_kotlin() {
+/// 调一个静态无返回值方法，并检查 JNI 是否真的成功了。
+fn call_static_void(
+    env: &mut jni::JNIEnv,
+    cls: &jni::objects::JClass,
+    name: &str,
+    sig: &str,
+    args: &[jni::objects::JValue],
+) -> JniResult<()> {
+    match env.call_static_method(cls, name, sig, args) {
+        Ok(_) => {
+            // call_static_method 返回 Ok 也可能带着挂起异常（Java 侧抛了，
+            // jni crate 不自动转换成 Err）——必须显式 check。
+            if env.exception_check().map_err(|e| e.to_string())? {
+                Err(format!("{name} 抛异常: {}", take_jni_exception(env)))
+            } else {
+                Ok(())
+            }
+        }
+        Err(e) => Err(format!(
+            "{name} 调用失败: {e}; {}",
+            take_jni_exception(env)
+        )),
+    }
+}
+
+/// 返回 Ok 仅当 Kotlin 侧渠道确实初始化成功。
+fn init_kotlin() -> JniResult<()> {
     with_activity(|env, activity| {
-        let Some(cls) = notify_bridge_class(env) else { return };
-        let _ = env.call_static_method(
-            cls,
+        let cls = notify_bridge_class(env)?;
+        call_static_void(
+            env,
+            &cls,
             "start",
             "(Landroid/content/Context;)V",
             &[jni::objects::JValue::Object(activity)],
-        );
-    });
+        )
+    })
 }
 
-fn kotlin_stop() {
+fn kotlin_stop() -> JniResult<()> {
     with_activity(|env, _activity| {
-        let Some(cls) = notify_bridge_class(env) else { return };
-        let _ = env.call_static_method(cls, "stop", "()V", &[]);
-    });
+        let cls = notify_bridge_class(env)?;
+        call_static_void(env, &cls, "stop", "()V", &[])
+    })
 }
 
-fn push_to_kotlin(json_data: &str) {
+fn push_to_kotlin(json_data: &str) -> JniResult<()> {
     with_activity(|env, _activity| {
-        let Some(cls) = notify_bridge_class(env) else { return };
-        let Ok(s) = env.new_string(json_data) else { return };
-        let _ = env.call_static_method(
-            cls,
+        let cls = notify_bridge_class(env)?;
+        let s = env
+            .new_string(json_data)
+            .map_err(|e| format!("new_string 失败: {e}"))?;
+        call_static_void(
+            env,
+            &cls,
             "onCard",
             "(Ljava/lang/String;)V",
             &[jni::objects::JValue::Object(&s)],
-        );
-    });
+        )
+    })
 }
 
 /// Kotlin AnswerReceiver 的 native 实现：设备 token POST 应答。

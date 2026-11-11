@@ -767,7 +767,9 @@ async function connect(cfg, skipProbe = false) {
         log("notify subscription started");
       }
     } catch (e) {
-      log(`notify start skipped: ${errMsg(e)}`);
+      // notify_start 现在会在 JNI/渠道初始化失败时返回 Err；日志必须说清是
+      // 「启动失败」而非「跳过」，否则排查会误判为功能没启用。
+      log(`notify subscription FAILED: ${errMsg(e)}`);
     }
   }
 
