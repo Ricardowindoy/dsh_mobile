@@ -3,11 +3,11 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.19",
+            "version": "1.0.20",
             "filename": "app-arm64-release.apk",
-            "size": 7450483,
-            "sha256": "b24484a1e55344d638ee13c2476e50352c6fd9485677fccf8e0a4be8faff6a53",
-            "releaseNote": "1.0.19 修复重连重放历史通知（序号游标+过期截断+去重）",
+            "size": 7451414,
+            "sha256": "a3f8cb5d49f1917ebdf5cff14e585ffbf8d9ee429282098b723ca7f875d5cad6",
+            "releaseNote": "1.0.20 点通知跳到对应会话 + 通知链路 review 修复",
             "releaseAt": "2026-11-12",
             "force": false
         },
