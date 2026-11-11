@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "dsh-mobile"
-version = "1.0.14"
+version = "1.0.15"
 dependencies = [
  "jni",
  "reqwest 0.12.28",
