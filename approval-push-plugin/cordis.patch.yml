@@ -10,9 +10,9 @@
     - id: dsh-approval-push
       name: '@local/dsh-approval-push'
       config:
-        relayUrl: 'https://relay.example.com:24000'
-        accessTokenFile: /path/to/relay-access-token
-        caFile: /path/to/dsh-relay-ca.crt
+        relayUrl: 'https://8.148.8.249:24000'
+        accessTokenFile: /home/radxa/.config/dsh-forwarder/relay-access-token
+        caFile: /home/radxa/project/dsh/dsh_mobile/.tls/dsh-relay-ca.crt
         deviceId: ''
         claimApprovals: true
         askTimeoutMs: 110000

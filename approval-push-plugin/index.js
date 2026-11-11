@@ -42,7 +42,7 @@ import { request as httpRequest } from 'node:http'
 import Schema from '@deepseek-ai/schemastery'
 
 export const Config = Schema.object({
-  // Relay base URL (no trailing slash), e.g. https://relay.example.com:24000
+  // Relay base URL (no trailing slash), e.g. https://8.148.8.249:24000
   relayUrl: Schema.string().required(),
   // Management credential file (same token the remote-access plugin uses).
   accessTokenFile: Schema.string().required(),
@@ -56,6 +56,14 @@ export const Config = Schema.object({
   claimApprovals: Schema.boolean().default(true),
   // A claimed ask nobody answers resolves unavailable after this long.
   askTimeoutMs: Schema.number().default(110_000).min(5_000).max(300_000),
+  // Claim ask_user_question only when the phone can answer it in one tap
+  // (one single-select question with 1..3 options). Other questions are
+  // still mirrored as informational cards but stay on the desktop.
+  claimQuestions: Schema.boolean().default(true),
+  // A claimed question nobody answers fails as ASK_TIMED_OUT after this long.
+  questionTimeoutMs: Schema.number().default(110_000).min(5_000).max(300_000),
+  // Push a card with the session title when a turn finishes.
+  notifyDone: Schema.boolean().default(true),
   // Long-poll cadence guard.
   pollWaitSeconds: Schema.number().default(25).min(1).max(25),
 })
@@ -68,6 +76,85 @@ export const inject = []
 
 const ONLINE_CACHE_MS = 3_000
 const DEVICES_CACHE_MS = 60_000
+/**
+ * Turn-end reasons that deserve a card, mapped to the card's status word.
+ * completed/max-tokens = normal finish; aborted = the user or the runtime
+ * interrupted the turn; error/blocked = the turn could not finish.
+ */
+const TURN_END_NOTICES = new Map([
+  ['completed', 'completed'],
+  ['max-tokens', 'completed'],
+  ['aborted', 'interrupted'],
+  ['error', 'error'],
+  ['blocked', 'blocked'],
+])
+/** Cooldown between completion cards of the SAME session. */
+const DONE_COOLDOWN_MS = 60_000
+/** Max one-tap options an Android notification can show as actions. */
+const MAX_INLINE_OPTIONS = 3
+
+/** Join an assistant message's text blocks into one collapsed line. */
+function textOfMessage(message) {
+  if (message === null || typeof message !== 'object') return ''
+  const blocks = Array.isArray(message.content) ? message.content : []
+  let out = ''
+  for (const block of blocks) {
+    if (block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
+      out += block.text
+    }
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+/** Ellipsize a preview to maxChars characters (code points, not UTF-16 units). */
+function clipPreview(text, maxChars = 160) {
+  if (typeof text !== 'string') return ''
+  const chars = Array.from(text)
+  if (chars.length <= maxChars) return text
+  return `${chars.slice(0, maxChars).join('')}…`
+}
+
+/**
+ * One-line summary for a completion card: the first real paragraph of the
+ * reply, markdown stripped, clipped hard. The card is a nudge ("something
+ * finished"), not a transcript — pushing the whole reply is the complaint
+ * this replaces.
+ */
+function summarizeReply(markdown, maxChars = 60) {
+  if (typeof markdown !== 'string') return ''
+  const blocks = markdown.split(/\n\s*\n/)
+  for (const block of blocks) {
+    const plain = plainText(block).replace(/^\s*#+\s*/, '').trim()
+    if (plain.length > 0) return clipPreview(plain, maxChars)
+  }
+  return ''
+}
+
+/**
+ * Turn an assistant reply into plain notification text.
+ *
+ * The completion card used to show the raw Markdown source (`**bold**`,
+ * `##`, table pipes, code fences), which reads as noise on a lock screen.
+ * Strip the syntax but keep the words, numbers and line order.
+ */
+function plainText(markdown) {
+  if (typeof markdown !== 'string') return ''
+  let out = markdown
+  out = out.replace(/```[\s\S]*?```/g, ' ')       // fenced code blocks
+  out = out.replace(/`([^`]*)`/g, '$1')            // inline code
+  out = out.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')  // images
+  out = out.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> label
+  out = out.replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headings
+  out = out.replace(/^\s{0,3}>\s?/gm, '')          // blockquotes
+  out = out.replace(/^\s*[-*+]\s+/gm, '')          // list bullets
+  out = out.replace(/^\s*\d+\.\s+/gm, '')          // ordered list markers
+  out = out.replace(/^\s*\|?[\s:-]*\|[\s:|-]*$/gm, ' ') // table separator rows
+  out = out.replace(/\|/g, ' ')                    // table cell separators
+  out = out.replace(/\*\*([^*]*)\*\*/g, '$1')      // bold
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2') // italics
+  out = out.replace(/~~([^~]*)~~/g, '$1')          // strikethrough
+  return out.replace(/\s+/g, ' ').trim()
+}
 
 /** POST JSON, direct socket (no env proxy / global dispatcher) — the exact
  *  transport that measured working in remote-access-plugin (2026-11-08). */
@@ -147,7 +234,38 @@ export function apply(ctx, config) {
   // reconcile with the asked event when it arrives.
   const askedIndex = new Map() // auditId → pendingKey
 
-  const pendingKey = (req) => `${req.agent?.session?.id ?? '?'}/${req.callId ?? req.toolName}`
+  // ── pending one-tap questions: card id → {resolve, timer} ──
+  const pendingQuestions = new Map()
+  // Completion-card bookkeeping: latest assistant text per `session#turn`,
+  // and the last completion card time per session (anti-spam cooldown).
+  const turnText = new Map()
+  const lastDoneAt = new Map()
+
+  // Session titles arrive from the session-title service. Read it lazily:
+  // `ctx.get` can be undefined during early activation, and a cached
+  // undefined would silently degrade every card to the session id.
+  const titleOf = (session, sessionId) => {
+    try {
+      const svc = ctx.get('sessionTitle')
+      if (svc === undefined || svc === null) return ''
+      const snap = svc.get(session)
+      if (snap !== null && typeof snap === 'object' && typeof snap.title === 'string' && snap.title.length > 0) {
+        return snap.title
+      }
+    } catch { /* title is cosmetic; never fail a card over it */ }
+    return ''
+  }
+
+  // callId 缺失时（部分 asker 不提供）只用 session/tool 会碰撞：同一会话
+  // 里两个同工具审批会共用一个 pending 槽，后一个覆盖前一个，前者永远
+  // 等不到结果（泄漏 + 超时）。补一个自增序号保证唯一。
+  // 代价：无 callId 的请求无法与 approval/asked 的审计 id 关联，GUI 先答
+  // 的 retract 关联退化为不可用（该场景本就罕见，且不影响 fail-closed）。
+  let approvalKeySeq = 0
+  const pendingKey = (req) => {
+    const base = `${req.agent?.session?.id ?? '?'}/${req.callId ?? req.toolName}`
+    return req.callId === undefined || req.callId === null ? `${base}#${++approvalKeySeq}` : base
+  }
 
   let onlineCache = { at: 0, value: false }
   const phoneOnline = async () => {
@@ -155,7 +273,12 @@ export function apply(ctx, config) {
     if (now - onlineCache.at < ONLINE_CACHE_MS) return onlineCache.value
     try {
       const res = await getJson(`${base}/__dsh_tunnel__/notify/online`, 5000, ca, headers)
-      onlineCache = { at: now, value: res.status === 200 && JSON.parse(res.body).online === true }
+      // `watching` 才是「真的有活跃 SSE 通道」；`online` 带 90s 宽限，用它在
+      // 手机刚断线时认领审批，卡片谁都没收到，超时后还会被自动拒绝。
+      // 老 relay 不返回 watching → 退回 online（向后兼容）。
+      const body = res.status === 200 ? JSON.parse(res.body) : {}
+      const value = body.online === true && (body.watching === undefined || body.watching === true)
+      onlineCache = { at: now, value }
     } catch {
       onlineCache = { at: now, value: false } // unreachable relay = no subscriber = never claim
     }
@@ -195,11 +318,22 @@ export function apply(ctx, config) {
     return true
   }
 
+  /** Resolve a claimed question card with the phone's structured answer. */
+  const settleQuestion = (cardId, answers) => {
+    const p = pendingQuestions.get(cardId)
+    if (!p) return false
+    pendingQuestions.delete(cardId)
+    clearTimeout(p.timer)
+    p.resolve({ kind: 'answer', answer: { answers } })
+    return true
+  }
+
   // ── claim answerer ──
   if (config.claimApprovals) {
     ctx.on('approval/request', async (req, next) => {
       if (!(await phoneOnline())) return next()
       const key = pendingKey(req)
+      const approvalSessionId = String(req.agent?.session?.id ?? '')
       const outcome = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           pending.delete(key)
@@ -212,7 +346,8 @@ export function apply(ctx, config) {
         void pushCard({
           kind: 'approval',
           id: key,
-          sessionId: String(req.agent?.session?.id ?? ''),
+          sessionId: approvalSessionId,
+          title: titleOf(req.agent?.session, approvalSessionId),
           toolName: String(req.toolName ?? ''),
           reason: String(req.displayReason?.zh ?? req.displayReason?.en ?? req.reason ?? '').slice(0, 200),
           ts: Date.now(),
@@ -222,9 +357,88 @@ export function apply(ctx, config) {
     })
   }
 
-  // ── event source: audit pairs + questions ──
+  // ── question answerer (one-tap answers from the notification) ──
+  //
+  // The question waterfall is agent-scoped; a host-composition listener is
+  // untagged, and scopeTarget admits untagged listeners for every agent, so
+  // this receives every session's questions. We claim ONLY when the phone can
+  // answer in one tap: exactly one single-select question with 1..3 options
+  // (Android shows at most three notification actions). Everything else is
+  // mirrored as an informational card and stays on the desktop, because a
+  // claimed question would remove the desktop card while giving the phone no
+  // way to answer it.
+  if (config.claimQuestions) {
+    ctx.on('user-questions/request', async (req, next) => {
+      const questions = Array.isArray(req.questions) ? req.questions : []
+      const q = questions.length === 1 ? questions[0] : undefined
+      const options = Array.isArray(q?.options)
+        ? q.options.map((o) => String(o?.label ?? '')).filter((s) => s.length > 0)
+        : []
+      const sessionId = String(req.agent?.session?.id ?? '')
+      const inline = q !== undefined
+        && q.multiSelect !== true
+        && options.length >= 1
+        && options.length <= MAX_INLINE_OPTIONS
+
+      if (!inline) {
+        // No claim: keep the desktop card. Still nudge the phone with the
+        // question text so the user knows something is waiting.
+        if (await phoneOnline()) {
+          void pushCard({
+            kind: 'question',
+            id: `qn:${sessionId}:${req.wait?.callId ?? Date.now()}`,
+            sessionId,
+            title: titleOf(req.agent?.session, sessionId),
+            question: String(questions[0]?.question ?? ''),
+            options: [],
+            ts: Date.now(),
+          })
+        }
+        return next()
+      }
+
+      if (!(await phoneOnline())) return next()
+
+      const cardId = `q:${sessionId}:${req.wait?.callId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+      const outcome = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingQuestions.delete(cardId)
+          resolve({ kind: 'timeout' }) // fail-closed: never fabricate an answer
+        }, config.questionTimeoutMs)
+        pendingQuestions.set(cardId, { resolve, timer })
+        req.signal?.addEventListener?.('abort', () => {
+          // 取消 ≠ 超时：问请求被撤销时应如实报 cancelled，让上层知道
+          // 不是「用户没理」，而是这次提问根本没机会被回答。
+          if (pendingQuestions.delete(cardId)) { clearTimeout(timer); resolve({ kind: 'cancelled' }) }
+        }, { once: true })
+        void pushCard({
+          kind: 'question',
+          id: cardId,
+          sessionId,
+          title: titleOf(req.agent?.session, sessionId),
+          questionId: String(q.id ?? ''),
+          question: String(q.question ?? ''),
+          options,
+          multiSelect: false,
+          ts: Date.now(),
+        })
+      })
+      if (outcome && outcome.kind === 'answer') return outcome.answer
+      // Silence is not an answer. An empty selection would read as "the user
+      // skipped", so a timeout must surface as a timeout instead.
+      const cancelled = outcome && outcome.kind === 'cancelled'
+      throw Object.assign(new Error(cancelled
+        ? 'the question was cancelled before an answer arrived'
+        : 'the phone did not answer the question in time'), {
+        name: 'UserQuestionError',
+        code: cancelled ? 'ASK_CANCELLED' : 'ASK_TIMED_OUT',
+      })
+    })
+  }
+
+  // ── event source: audit pairs + questions + completions ──
   const lastSeq = new Map()
-  const handleEvent = (sessionId, event) => {
+  const handleEvent = (sessionId, event, session) => {
     const seq = Number(event?.seq)
     if (Number.isFinite(seq)) {
       const wm = lastSeq.get(sessionId) ?? -1
@@ -251,19 +465,64 @@ export function apply(ctx, config) {
         settlePending(key, outcome)
         void pushCard({ kind: 'retract', id: key, ts: Date.now() })
       }
-    } else if (event?.type === 'tool/call') {
+    } else if (event?.type === 'assistant/message') {
+      // Keep the last non-empty assistant text of each turn as the completion
+      // card's preview (same convention as the Windows popup bridge).
       const d = event.data ?? event.payload ?? {}
-      const name = d.name ?? d.toolName
-      if (name === 'ask_user_question') {
-        // Privacy: no question text on the card.
-        void pushCard({ kind: 'question', id: `${sessionId}/${d.callId ?? seq}`, sessionId, ts: Date.now() })
+      const turn = Number.isFinite(d.turn) ? d.turn : -1
+      if (turn < 0) return
+      const text = textOfMessage(d.message)
+      if (text.length > 0) {
+        turnText.set(`${sessionId}#${turn}`, text)
+        if (turnText.size > 500) {
+          const first = turnText.keys().next().value
+          turnText.delete(first)
+        }
       }
+    } else if (event?.type === 'turn/end') {
+      if (!config.notifyDone) return
+      const d = event.data ?? event.payload ?? {}
+      const reason = d.reason
+      const kind = reason !== null && typeof reason === 'object' ? reason.kind : ''
+      const status = TURN_END_NOTICES.get(kind)
+      if (status === undefined) return
+      const turn = Number.isFinite(d.turn) ? d.turn : -1
+      if (turn < 0) return
+      const key = `${sessionId}#${turn}`
+      let preview = turnText.get(key) || ''
+      turnText.delete(key)
+      if (status === 'interrupted' && preview.length === 0) preview = '会话已中断'
+      if (status === 'error' && preview.length === 0) preview = '本轮执行出错'
+      if (status === 'blocked' && preview.length === 0) preview = '本轮被阻塞'
+      // Subagent sessions finish constantly; their cards are noise on a phone.
+      if (session?.origin === 'subagent' || session?.parentSession !== undefined) return
+      const now = Date.now()
+      // Cooldown only damps normal completions; an interruption/error is rare
+      // and worth surfacing even if a completion just happened.
+      if (status === 'completed' && now - (lastDoneAt.get(sessionId) || 0) < DONE_COOLDOWN_MS) return
+      lastDoneAt.set(sessionId, now)
+      if (lastDoneAt.size > 200) {
+        const first = lastDoneAt.keys().next().value
+        lastDoneAt.delete(first)
+      }
+      void pushCard({
+        kind: 'done',
+        status,
+        // Stable per SESSION, not per turn: Android replaces a notification
+        // with the same id, so a long session updates one slot instead of
+        // stacking one card per reply (the "repeatedly pushed" complaint).
+        id: `done:${sessionId}`,
+        sessionId,
+        title: titleOf(session, sessionId),
+        preview: summarizeReply(preview, 60),
+        ts: now,
+      })
     }
   }
 
   ctx.on('session/event', (session, event) => {
     try {
-      if (session?.id !== undefined) handleEvent(String(session.id), event)
+      if (session?.id !== undefined) handleEvent(String(session.id), event, session)
     } catch (e) { console.error('[approval-push] event error:', e.message) }
   })
 
@@ -276,6 +535,15 @@ export function apply(ctx, config) {
         if (res.status !== 200) { await sleep(5000); continue }
         const body = JSON.parse(res.body)
         for (const a of body.answers || []) {
+          // Structured question answer: {id: cardId, answers:[{id, selected, custom}]}
+          if (Array.isArray(a.answers)) {
+            settleQuestion(String(a.id), a.answers.map((item) => ({
+              id: String(item?.id ?? ''),
+              selected: Array.isArray(item?.selected) ? item.selected.map(String) : [],
+              ...(typeof item?.custom === 'string' && item.custom.length > 0 ? { custom: item.custom } : {}),
+            })))
+            continue
+          }
           const decision = a.decision === 'allowed-once' ? 'allowed-once' : a.decision === 'rejected' ? 'rejected' : null
           if (!decision) continue
           // Answer id is the pending key (we pushed it as the card id).
@@ -297,10 +565,19 @@ export function apply(ctx, config) {
     stopped = true
     for (const [, p] of pending) { clearTimeout(p.timer); p.resolve(undefined) }
     pending.clear()
+    for (const [, p] of pendingQuestions) { clearTimeout(p.timer); p.resolve(null) }
+    pendingQuestions.clear()
   })
 
-  console.log('[approval-push] mounted', JSON.stringify({ relay: base, claim: config.claimApprovals, timeoutMs: config.askTimeoutMs }))
+  console.log('[approval-push] mounted', JSON.stringify({
+    relay: base,
+    claim: config.claimApprovals,
+    timeoutMs: config.askTimeoutMs,
+    claimQuestions: config.claimQuestions,
+    questionTimeoutMs: config.questionTimeoutMs,
+    notifyDone: config.notifyDone,
+  }))
 }
 
 /** Test-only seams. */
-export const internals = { postJson, getJson }
+export const internals = { postJson, getJson, plainText, clipPreview, summarizeReply }
