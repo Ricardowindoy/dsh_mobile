@@ -32,20 +32,46 @@ const (
 
 // NotifyMessage is one push card. Kind is a closed set; Reason is bounded by
 // the plugin before it gets here (defense in depth: re-bound at the gate).
+//
+// Question cards carry the question text and its option labels so the phone
+// can offer one-tap answer actions (v1.0.15). Title carries the session title
+// for completion cards. Both are display-only: the decision still rides the
+// phone's device credential, and the card itself confers no authority.
 type NotifyMessage struct {
-	Kind      string `json:"kind"` // approval | question | retract
+	Kind      string `json:"kind"` // approval | question | done | retract
 	ID        string `json:"id"`
 	SessionID string `json:"sessionId,omitempty"`
 	ToolName  string `json:"toolName,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	TS        int64  `json:"ts"`
+	// Title is the session title shown on question/done cards.
+	Title string `json:"title,omitempty"`
+	// QuestionID/Question/Options describe the single one-tap-answerable
+	// question. Option actions answer with {id: QuestionID, selected:[label]}.
+	QuestionID  string   `json:"questionId,omitempty"`
+	Question    string   `json:"question,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	MultiSelect bool     `json:"multiSelect,omitempty"`
+	// Preview is the clipped last assistant text on a completion card.
+	Preview string `json:"preview,omitempty"`
+}
+
+// QuestionAnswerItem mirrors the harness's AskUserQuestionAnswerItem shape:
+// selected option labels plus an optional free-text answer.
+type QuestionAnswerItem struct {
+	ID       string   `json:"id"`
+	Selected []string `json:"selected"`
+	Custom   string   `json:"custom,omitempty"`
 }
 
 type notifyAnswer struct {
 	ID       string `json:"id"`
-	Decision string `json:"decision"` // allowed-once | rejected
-	DeviceID string `json:"deviceId"`
-	TS       int64  `json:"ts"`
+	Decision string `json:"decision,omitempty"` // allowed-once | rejected (approval)
+	// Answers carries structured question answers (question cards). Exactly
+	// one of Decision/Answers is set per answer.
+	Answers  []QuestionAnswerItem `json:"answers,omitempty"`
+	DeviceID string               `json:"deviceId"`
+	TS       int64                `json:"ts"`
 }
 
 type deviceNotify struct {
@@ -203,7 +229,7 @@ func (r *Relay) handleNotifyPush(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	switch body.Message.Kind {
-	case "approval", "question", "retract":
+	case "approval", "question", "done", "retract":
 	default:
 		http.Error(w, "unknown kind", http.StatusBadRequest)
 		return
@@ -330,10 +356,11 @@ func (r *Relay) handleNotifyAnswer(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	var body struct {
-		ID       string `json:"id"`
-		Decision string `json:"decision"`
+		ID       string               `json:"id"`
+		Decision string               `json:"decision"`
+		Answers  []QuestionAnswerItem `json:"answers"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 4096)).Decode(&body); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, 8192)).Decode(&body); err != nil {
 		http.Error(w, "bad json body", http.StatusBadRequest)
 		return
 	}
@@ -341,9 +368,39 @@ func (r *Relay) handleNotifyAnswer(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	if body.Decision != "allowed-once" && body.Decision != "rejected" {
+	// Exactly one answer shape: an approval decision from the closed set, or
+	// structured question answers. A card that carries both is refused rather
+	// than silently preferring one (a mismatch here would let a question card
+	// be answered as an approval).
+	hasDecision := body.Decision != ""
+	hasAnswers := body.Answers != nil
+	if hasDecision == hasAnswers {
+		http.Error(w, "exactly one of decision/answers required", http.StatusBadRequest)
+		return
+	}
+	if hasDecision && body.Decision != "allowed-once" && body.Decision != "rejected" {
 		http.Error(w, "decision must be allowed-once or rejected", http.StatusBadRequest)
 		return
+	}
+	if hasAnswers {
+		if len(body.Answers) == 0 || len(body.Answers) > 16 {
+			http.Error(w, "answers must contain 1..16 items", http.StatusBadRequest)
+			return
+		}
+		for _, a := range body.Answers {
+			if a.ID == "" || len(a.ID) > 128 {
+				http.Error(w, "answer id required", http.StatusBadRequest)
+				return
+			}
+			if a.Selected == nil {
+				http.Error(w, "answer selected must be an array", http.StatusBadRequest)
+				return
+			}
+			if len(a.Selected) > 16 || len(a.Custom) > 2000 {
+				http.Error(w, "answer too large", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	// One-shot: the same id from the same device is accepted once; a replay
 	// answers 410 so the phone can mark the card handled/expired.
@@ -367,7 +424,13 @@ func (r *Relay) handleNotifyAnswer(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "already answered", http.StatusGone)
 		return
 	}
-	r.notify.enqueueAnswer(notifyAnswer{ID: body.ID, Decision: body.Decision, DeviceID: d.DeviceID, TS: now.UnixMilli()})
+	r.notify.enqueueAnswer(notifyAnswer{
+		ID:       body.ID,
+		Decision: body.Decision,
+		Answers:  body.Answers,
+		DeviceID: d.DeviceID,
+		TS:       now.UnixMilli(),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"accepted": true})
 }
 

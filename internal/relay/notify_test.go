@@ -246,3 +246,126 @@ func TestNotifyDisabled(t *testing.T) {
 	}
 	_ = slog.Default()
 }
+
+// Question cards carry the question text + option labels and a session title;
+// completion cards carry the session title + preview. Both are new closed-set
+// kinds introduced with one-tap answers (v1.0.15).
+// Mutation: drop "done" from the kind set -> red; drop question fields from
+// the struct -> the phone would render an answerless card.
+func TestNotifyPushQuestionAndDoneCards(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	questionCard := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"question","id":"q1",` +
+		`"title":"重构登录页","questionId":"scope","question":"选哪个方案？",` +
+		`"options":["方案 A","方案 B"],"multiSelect":false}}`
+	pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(questionCard),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"})
+	if pw.Code != http.StatusOK {
+		t.Fatalf("question push = %d %q", pw.Code, pw.Body.String())
+	}
+
+	doneCard := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"d1",` +
+		`"title":"重构登录页","preview":"改完了，测试全绿"}}`
+	pw = do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(doneCard),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"})
+	if pw.Code != http.StatusOK {
+		t.Fatalf("done push = %d %q", pw.Code, pw.Body.String())
+	}
+
+	// The ring replays both cards with their payload intact.
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
+	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	var cards []NotifyMessage
+	for len(cards) < 2 {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("SSE read: %v", err)
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var msg NotifyMessage
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &msg); err != nil {
+			t.Fatalf("card decode: %v", err)
+		}
+		cards = append(cards, msg)
+	}
+	if cards[0].Kind != "question" || cards[0].Question != "选哪个方案？" ||
+		len(cards[0].Options) != 2 || cards[0].Title != "重构登录页" || cards[0].QuestionID != "scope" {
+		t.Fatalf("question card payload = %+v", cards[0])
+	}
+	if cards[1].Kind != "done" || cards[1].Title != "重构登录页" || cards[1].Preview == "" {
+		t.Fatalf("done card payload = %+v", cards[1])
+	}
+}
+
+// A question answer carries structured answers instead of a decision.
+// Mutation: accept both shapes at once -> red (a question card could be
+// answered as an approval); accept neither -> red (an empty answer would
+// resolve a pending question as "skipped").
+func TestNotifyAnswerStructured(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+
+	// Both shapes at once refused.
+	w := do(h, "POST", "/__dsh_tunnel__/notify/answer",
+		strings.NewReader(`{"id":"q1","decision":"rejected","answers":[{"id":"scope","selected":["方案 A"]}]}`), nil, cookie)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("both shapes = %d, want 400", w.Code)
+	}
+	// Neither shape refused.
+	w = do(h, "POST", "/__dsh_tunnel__/notify/answer", strings.NewReader(`{"id":"q1"}`), nil, cookie)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("no shape = %d, want 400", w.Code)
+	}
+	// Malformed answers refused.
+	for _, body := range []string{
+		`{"id":"q1","answers":[]}`,
+		`{"id":"q1","answers":[{"id":"","selected":["a"]}]}`,
+		`{"id":"q1","answers":[{"id":"scope","selected":null}]}`,
+	} {
+		w = do(h, "POST", "/__dsh_tunnel__/notify/answer", strings.NewReader(body), nil, cookie)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("%s = %d, want 400", body, w.Code)
+		}
+	}
+	// Valid structured answer accepted, and drained by the management poll.
+	w = do(h, "POST", "/__dsh_tunnel__/notify/answer",
+		strings.NewReader(`{"id":"q1","answers":[{"id":"scope","selected":["方案 B"],"custom":"补充说明"}]}`), nil, cookie)
+	if w.Code != http.StatusOK {
+		t.Fatalf("structured answer = %d %q", w.Code, w.Body.String())
+	}
+	aw := do(h, "GET", "/__dsh_tunnel__/notify/answers?wait=1", nil, map[string]string{"X-DSH-Relay-Token": "admin-sekrit"})
+	var out struct {
+		Answers []notifyAnswer `json:"answers"`
+	}
+	_ = json.Unmarshal(aw.Body.Bytes(), &out)
+	if len(out.Answers) != 1 || len(out.Answers[0].Answers) != 1 ||
+		out.Answers[0].Answers[0].ID != "scope" ||
+		out.Answers[0].Answers[0].Selected[0] != "方案 B" ||
+		out.Answers[0].Answers[0].Custom != "补充说明" {
+		t.Fatalf("drained answer = %+v", out.Answers)
+	}
+	// Replay of the same id is still one-shot.
+	w = do(h, "POST", "/__dsh_tunnel__/notify/answer",
+		strings.NewReader(`{"id":"q1","answers":[{"id":"scope","selected":["方案 A"]}]}`), nil, cookie)
+	if w.Code != http.StatusGone {
+		t.Fatalf("replayed structured answer = %d, want 410", w.Code)
+	}
+}
