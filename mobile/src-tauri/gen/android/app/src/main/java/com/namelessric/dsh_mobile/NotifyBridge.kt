@@ -40,6 +40,16 @@ object NotifyBridge {
 
   private val executor = Executors.newSingleThreadExecutor()
   private val cards = ConcurrentHashMap<String, JSONObject>()
+
+  /** 通知链路诊断日志（cacheDir/dsh-notify.log）：只在出问题时看，64KB 封顶。 */
+  private fun logLine(ctx: Context, msg: String) {
+    try {
+      val f = java.io.File(ctx.cacheDir, "dsh-notify.log")
+      if (f.length() > 64 * 1024) f.delete()
+      f.appendText("${System.currentTimeMillis()} $msg\n")
+    } catch (_: Throwable) {
+    }
+  }
   @Volatile private var started = false
   @Volatile private var appContext: Context? = null
 
@@ -68,6 +78,11 @@ object NotifyBridge {
         }
       }
     }
+    val permState = if (Build.VERSION.SDK_INT >= 33) {
+      if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) "granted" else "denied"
+    } else "n/a"
+    val enabled = NotificationManagerCompat.from(ctx).areNotificationsEnabled()
+    logLine(ctx, "start perm=$permState notificationsEnabled=$enabled")
     if (started) return
     started = true
     val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -109,6 +124,7 @@ object NotifyBridge {
           }
           "approval", "question" -> {
             cards[id] = msg
+            logLine(ctx, "card kind=${msg.optString("kind")} id=$id tool=${msg.optString("toolName")}")
             showCard(ctx, id, msg)
           }
         }

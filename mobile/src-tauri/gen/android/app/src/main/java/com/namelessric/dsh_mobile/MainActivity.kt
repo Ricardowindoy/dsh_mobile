@@ -36,6 +36,14 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     logLifecycle("onCreate")
+    // Android 13+ 通知权限：在启动可见阶段请求。放在 connect() 里请求会被
+    // 紧接着的页面导航打断，用户来不及点，通知就一直发不出来。
+    if (Build.VERSION.SDK_INT >= 33 &&
+      ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+      android.content.pm.PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1002)
+    }
     // ---- 诊断（白屏/ANR 排查，v0.1.17 后可按需移除）----
     // 打开 WebView 远程调试：release 包默认关闭，开启后可用 chrome://inspect
     // （或 adb forward 到 webview_devtools_remote_<pid> + CDP）直接查看页面 URL、

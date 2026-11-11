@@ -590,6 +590,20 @@ fn read_crash_log(app: tauri::AppHandle) -> Result<String, String> {
     }
     // Kotlin 侧的生命周期记录（onCreate/onPause/onStop…）：定位"打开就切后台"
     // 到底发生在哪一步。读走即清，避免无限累积。
+    // 通知链路诊断（NotifyBridge 写 cacheDir/dsh-notify.log）。
+    let notify_path = app
+        .path()
+        .app_cache_dir()
+        .map(|p| p.join("dsh-notify.log"))
+        .unwrap_or_else(|_| dir.join("dsh-notify.log"));
+    if let Ok(text) = std::fs::read_to_string(&notify_path) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("-- notify --\n");
+        out.push_str(&text);
+        let _ = std::fs::remove_file(&notify_path);
+    }
     // Kotlin 写的是 Context.cacheDir；必须直接用 app_cache_dir 定位，
     // 不能跟着上面 app_log_dir 的落点走。
     let life_path = app
