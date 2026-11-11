@@ -36,6 +36,9 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     logLifecycle("onCreate")
+    // 预热 loopback OAuth 回调的 relay 入口缓存（后台线程读 config.json，
+    // 导航回调里只读内存 —— 见 LoopbackOAuthRelay 的说明）。
+    LoopbackOAuthRelay.warm(this)
     // Android 13+ 通知权限：在启动可见阶段请求。放在 connect() 里请求会被
     // 紧接着的页面导航打断，用户来不及点，通知就一直发不出来。
     if (Build.VERSION.SDK_INT >= 33 &&
@@ -84,6 +87,18 @@ class MainActivity : TauriActivity() {
       insets
     }
     Log.i("dsh-diag", "onCreate END +${System.currentTimeMillis() - t0}ms")
+  }
+
+  /**
+   * Tauri/wry 在 [WryActivity.setWebView] 里装好 `RustWebViewClient` 后会回调这里。
+   * 再套一层 [LoopbackWebViewClient]：只拦截 `http://127.0.0.1:<port>/...` 的
+   * RFC 8252 回调并改写走 relay，其余行为全部委托给原 client。
+   */
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    // ⚠️ wry 的 JNI 顺序是 setWebView（本回调）→ setWebViewClient；
+    // 用带重试的延迟安装，等 RustWebViewClient 装好后再包一层。
+    installLoopbackWebViewClient(webView)
   }
 
   // ---- 诊断：主线程看门狗 ----
