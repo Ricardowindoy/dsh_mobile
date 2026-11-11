@@ -131,6 +131,12 @@ object NotifyBridge {
     Log.i(TAG, "stopped")
   }
 
+  /** 深链诊断（写入 dsh-notify.log，下次启动随日志上传）。 */
+  @JvmStatic
+  fun logDeepLink(message: String) {
+    appContext?.let { logLine(it, "deep link $message") }
+  }
+
   /** JNI 入口：一条 SSE 消息（JSON 原文）。kind=approval|question|done|retract。 */
   @JvmStatic
   fun onCard(json: String) {

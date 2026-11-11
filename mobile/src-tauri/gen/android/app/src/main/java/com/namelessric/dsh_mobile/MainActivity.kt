@@ -107,6 +107,10 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webViewRef = webView
+    // App 升级后清一次 WebView 的 HTTP 磁盘缓存：GUI 的 boot 页与客户端插件
+    // 都走 WebView 缓存，JS 侧 clearServiceWorkers 清不掉它（本项目已踩过）。
+    // 不清的话，新加的客户端插件（例如通知深链）会一直不生效。
+    maybeClearWebViewCache(webView)
     // ⚠️ wry 的 JNI 顺序是 setWebView（本回调）→ setWebViewClient；
     // 用带重试的延迟安装，等 RustWebViewClient 装好后再包一层。
     installLoopbackWebViewClient(webView)
@@ -116,6 +120,26 @@ class MainActivity : TauriActivity() {
     super.onNewIntent(intent)
     setIntent(intent)
     dispatchSessionIntent(intent)
+  }
+
+  /**
+   * 版本号变化时清一次 WebView 缓存并重载，让新的 GUI/插件 bundle 生效。
+   * 只在新版本第一次启动时做，避免每次启动都重载。
+   */
+  private fun maybeClearWebViewCache(webView: WebView) {
+    try {
+      val prefs = getSharedPreferences("dsh-webview", MODE_PRIVATE)
+      val version = packageManager.getPackageInfo(packageName, 0).versionName ?: return
+      if (prefs.getString("cacheVersion", null) == version) return
+      prefs.edit().putString("cacheVersion", version).apply()
+      webView.clearCache(true)
+      webView.clearHistory()
+      logLifecycle("webview-cache-cleared:$version")
+      Log.i("dsh-diag", "webview cache cleared for version $version")
+      webView.postDelayed({ runCatching { webView.reload() } }, 400)
+    } catch (e: Throwable) {
+      Log.w("dsh-diag", "clear webview cache failed: ${e.message}")
+    }
   }
 
   /**
@@ -134,9 +158,11 @@ class MainActivity : TauriActivity() {
     if (wv != null && (wv.url?.startsWith("http") == true)) {
       val safe = sessionId.replace("'", "")
       wv.post { wv.evaluateJavascript("location.hash='session=$safe'", null) }
+      NotifyBridge.logDeepLink("warm session=$sessionId url=${wv.url}")
       Log.i("dsh-diag", "deep link (warm) session=$sessionId")
     } else {
       nativeSetPendingSession(sessionId)
+      NotifyBridge.logDeepLink("cold session=$sessionId")
       Log.i("dsh-diag", "deep link (cold) session=$sessionId")
     }
   }
