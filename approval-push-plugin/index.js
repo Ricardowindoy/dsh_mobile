@@ -40,6 +40,8 @@ import { readFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import Schema from './src/schema.js'
+import { doneId, doneSlot } from './src/ids.js'
+import { textOfMessage, clipPreview, plainText, summarizeReply } from './src/preview.js'
 
 export const Config = Schema.object({
   // Relay base URL (no trailing slash), e.g. https://8.148.8.249:24000
@@ -92,69 +94,6 @@ const TURN_END_NOTICES = new Map([
 const DONE_COOLDOWN_MS = 60_000
 /** Max one-tap options an Android notification can show as actions. */
 const MAX_INLINE_OPTIONS = 3
-
-/** Join an assistant message's text blocks into one collapsed line. */
-function textOfMessage(message) {
-  if (message === null || typeof message !== 'object') return ''
-  const blocks = Array.isArray(message.content) ? message.content : []
-  let out = ''
-  for (const block of blocks) {
-    if (block !== null && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string') {
-      out += block.text
-    }
-  }
-  return out.replace(/\s+/g, ' ').trim()
-}
-
-/** Ellipsize a preview to maxChars characters (code points, not UTF-16 units). */
-function clipPreview(text, maxChars = 160) {
-  if (typeof text !== 'string') return ''
-  const chars = Array.from(text)
-  if (chars.length <= maxChars) return text
-  return `${chars.slice(0, maxChars).join('')}…`
-}
-
-/**
- * One-line summary for a completion card: the first real paragraph of the
- * reply, markdown stripped, clipped hard. The card is a nudge ("something
- * finished"), not a transcript — pushing the whole reply is the complaint
- * this replaces.
- */
-function summarizeReply(markdown, maxChars = 60) {
-  if (typeof markdown !== 'string') return ''
-  const blocks = markdown.split(/\n\s*\n/)
-  for (const block of blocks) {
-    const plain = plainText(block).replace(/^\s*#+\s*/, '').trim()
-    if (plain.length > 0) return clipPreview(plain, maxChars)
-  }
-  return ''
-}
-
-/**
- * Turn an assistant reply into plain notification text.
- *
- * The completion card used to show the raw Markdown source (`**bold**`,
- * `##`, table pipes, code fences), which reads as noise on a lock screen.
- * Strip the syntax but keep the words, numbers and line order.
- */
-function plainText(markdown) {
-  if (typeof markdown !== 'string') return ''
-  let out = markdown
-  out = out.replace(/```[\s\S]*?```/g, ' ')       // fenced code blocks
-  out = out.replace(/`([^`]*)`/g, '$1')            // inline code
-  out = out.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')  // images
-  out = out.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links -> label
-  out = out.replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headings
-  out = out.replace(/^\s{0,3}>\s?/gm, '')          // blockquotes
-  out = out.replace(/^\s*[-*+]\s+/gm, '')          // list bullets
-  out = out.replace(/^\s*\d+\.\s+/gm, '')          // ordered list markers
-  out = out.replace(/^\s*\|?[\s:-]*\|[\s:|-]*$/gm, ' ') // table separator rows
-  out = out.replace(/\|/g, ' ')                    // table cell separators
-  out = out.replace(/\*\*([^*]*)\*\*/g, '$1')      // bold
-  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1$2') // italics
-  out = out.replace(/~~([^~]*)~~/g, '$1')          // strikethrough
-  return out.replace(/\s+/g, ' ').trim()
-}
 
 /** POST JSON, direct socket (no env proxy / global dispatcher) — the exact
  *  transport that measured working in remote-access-plugin (2026-11-08). */
@@ -236,6 +175,7 @@ export function apply(ctx, config) {
 
   // ── pending one-tap questions: card id → {resolve, timer} ──
   const pendingQuestions = new Map()
+  let questionSeq = 0
   // Completion-card bookkeeping: latest assistant text per `session#turn`,
   // and the last completion card time per session (anti-spam cooldown).
   const turnText = new Map()
@@ -285,6 +225,22 @@ export function apply(ctx, config) {
     return onlineCache.value
   }
 
+  // v2：必须绑定唯一设备。配置为空时只接受「恰好一台配对设备」，
+  // 多台一律拒绝——广播会让同一事件在多台设备各弹一次，是重复的放大器。
+  let boundDeviceId = String(config.deviceId || '').trim()
+  const resolveDevice = async () => {
+    if (boundDeviceId) return boundDeviceId
+    const res = await getJson(`${base}/__dsh_tunnel__/pair/devices`, 5000, ca, headers)
+    if (res.status !== 200) throw new Error(`pair/devices HTTP ${res.status}`)
+    const ids = (JSON.parse(res.body).devices || []).map((d) => d.deviceId).filter(Boolean)
+    if (ids.length === 1) {
+      boundDeviceId = ids[0]
+      console.log('[approval-push] auto-bound single device:', boundDeviceId)
+      return boundDeviceId
+    }
+    throw new Error(`deviceId 未配置且配对设备数为 ${ids.length}；拒绝广播，请在配置里指定 deviceId`)
+  }
+
   let devicesCache = { at: 0, ids: [] }
   const targetDevices = async () => {
     if (config.deviceId) return [config.deviceId]
@@ -298,14 +254,31 @@ export function apply(ctx, config) {
     return devicesCache.ids
   }
 
+  // 已发送过的逻辑事件（幂等键）。同一 id 只推一次：重放/重复派发都跳过。
+  // 上限 1000，按插入顺序淘汰最旧。
+  const sentIds = new Set()
+  const markSent = (id) => {
+    if (sentIds.has(id)) return false
+    sentIds.add(id)
+    if (sentIds.size > 1000) sentIds.delete(sentIds.values().next().value)
+    return true
+  }
+
   const pushCard = async (message) => {
-    const ids = await targetDevices()
-    for (const deviceId of ids) {
-      try {
-        await postJson(`${base}/__dsh_tunnel__/notify/push`, 8000, ca, headers, { deviceId, message })
-      } catch (e) {
-        console.warn('[approval-push] push failed:', e.message)
-      }
+    if (!markSent(message.id)) return false
+    let deviceId
+    try {
+      deviceId = await resolveDevice()
+    } catch (e) {
+      console.error('[approval-push] device binding failed:', e.message)
+      return false
+    }
+    try {
+      await postJson(`${base}/__dsh_tunnel__/notify/push`, 8000, ca, headers, { deviceId, message })
+      return true
+    } catch (e) {
+      console.warn('[approval-push] push failed:', e.message)
+      return false
     }
   }
 
@@ -399,7 +372,7 @@ export function apply(ctx, config) {
 
       if (!(await phoneOnline())) return next()
 
-      const cardId = `q:${sessionId}:${req.wait?.callId ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+      const cardId = `question:${sessionId}:${req.wait?.callId ?? ++questionSeq}`
       const outcome = await new Promise((resolve) => {
         const timer = setTimeout(() => {
           pendingQuestions.delete(cardId)
@@ -463,7 +436,8 @@ export function apply(ctx, config) {
         // and retract the phone card.
         const outcome = ['allowed-once', 'rejected', 'cancelled'].includes(d.outcome) ? d.outcome : undefined
         settlePending(key, outcome)
-        void pushCard({ kind: 'retract', id: key, ts: Date.now() })
+        // retract 用独立 id（否则被幂等去重挡掉），slot 指向被撤销的卡片。
+        void pushCard({ kind: 'retract', id: `retract:${key}`, slot: key, ts: Date.now() })
       }
     } else if (event?.type === 'assistant/message') {
       // Keep the last non-empty assistant text of each turn as the completion
@@ -508,10 +482,9 @@ export function apply(ctx, config) {
       void pushCard({
         kind: 'done',
         status,
-        // Stable per SESSION, not per turn: Android replaces a notification
-        // with the same id, so a long session updates one slot instead of
-        // stacking one card per reply (the "repeatedly pushed" complaint).
-        id: `done:${sessionId}`,
+        // id 区分每一轮（幂等键）；slot 每会话一个（展示槽位）。
+        id: doneId(sessionId, turn),
+        slot: doneSlot(sessionId),
         sessionId,
         title: titleOf(session, sessionId),
         preview: summarizeReply(preview, 60),

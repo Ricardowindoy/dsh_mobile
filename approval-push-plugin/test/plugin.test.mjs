@@ -8,7 +8,7 @@ import fs from 'node:fs/promises'
 import { Config, apply } from '../index.js'
 
 /** Fake relay implementing the notify management surface + presence. */
-async function fakeRelay({ online = true, watching } = {}) {
+async function fakeRelay({ online = true, watching, devices = [{ deviceId: 'ph_1' }] } = {}) {
   const pushed = []
   let answerQueue = []
   let onlineValue = online
@@ -18,7 +18,7 @@ async function fakeRelay({ online = true, watching } = {}) {
     res.setHeader('content-type', 'application/json')
     if (req.headers['x-dsh-relay-token'] !== 'admin-sekrit') { res.statusCode = 401; res.end('{}'); return }
     if (req.url === '/__dsh_tunnel__/notify/online') { res.end(JSON.stringify({ online: onlineValue, watching: watchingValue })); return }
-    if (req.url === '/__dsh_tunnel__/pair/devices') { res.end(JSON.stringify({ devices: [{ deviceId: 'ph_1' }] })); return }
+    if (req.url === '/__dsh_tunnel__/pair/devices') { res.end(JSON.stringify({ devices })); return }
     if (req.url === '/__dsh_tunnel__/notify/push') {
       let body = ''
       req.on('data', (c) => { body += c })
@@ -152,7 +152,7 @@ test('GUI decides first → durable outcome adopted, retract pushed', async (t) 
   await sleep(100)
   const retract = relay.pushed.find((p) => p.message.kind === 'retract')
   assert.ok(retract, 'retract card pushed after GUI decided')
-  assert.equal(retract.message.id, card.id)
+  assert.equal(retract.message.slot, card.id)
 })
 
 // ── v1.0.15: one-tap question cards + completion cards ─────────────────────
@@ -246,28 +246,26 @@ test('turn completion pushes one per-session done card, markdown stripped', asyn
   const card = relay.pushed.find((x) => x.message.kind === 'done')
   assert.ok(card, 'done card pushed')
   assert.equal(card.message.title, '重构登录页')
-  assert.equal(card.message.id, 'done:s8', 'stable per-session id so Android replaces the slot')
+  assert.equal(card.message.id, 'done:s8:3', 'id is per logical turn (idempotency key)')
+  assert.equal(card.message.slot, 'done:s8', 'slot is per session so Android replaces it')
   assert.ok(card.message.preview.includes('改完了'), card.message.preview)
   assert.ok(!/[*#|]/.test(card.message.preview), `markdown leaked: ${card.message.preview}`)
 })
 
-// Same session, later turn: the card id must stay identical (slot replacement),
-// while a different session gets its own slot.
-test('done card id is per-session, not per-turn', async (t) => {
+// id 区分每一轮（幂等键），slot 每会话唯一（展示覆盖）。
+test('done id is per-turn, slot is per-session', async (t) => {
   const { ctx, relay } = await setup(t, { online: true }, {}, { sessionTitle: 'S' })
-  for (const [turn, seq] of [[1, 1], [2, 3]]) {
-    ctx.emit('session/event', { id: 's10' }, {
-      type: 'assistant/message', seq,
-      data: { turn, message: { content: [{ type: 'text', text: `第 ${turn} 轮` }] } },
-    })
-    ctx.emit('session/event', { id: 's10' }, { type: 'turn/end', seq: seq + 1, data: { turn, reason: { kind: 'completed' } } })
-  }
+  ctx.emit('session/event', { id: 's10' }, { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'completed' } } })
+  await sleep(120)
+  ctx.emit('session/event', { id: 's10' }, { type: 'turn/end', seq: 2, data: { turn: 2, reason: { kind: 'aborted' } } })
   ctx.emit('session/event', { id: 's11' }, { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'completed' } } })
   await sleep(200)
-  const ids = relay.pushed.filter((x) => x.message.kind === 'done').map((x) => x.message.id)
-  // The second turn of the SAME session lands inside the 60s cooldown, so it is
-  // suppressed; a different session gets its own (still per-session) slot.
-  assert.deepEqual(ids, ['done:s10', 'done:s11'])
+  const cards = relay.pushed.filter((x) => x.message.kind === 'done').map((x) => ({ id: x.message.id, slot: x.message.slot }))
+  assert.deepEqual(cards, [
+    { id: 'done:s10:1', slot: 'done:s10' },
+    { id: 'done:s10:2', slot: 'done:s10' },
+    { id: 'done:s11:1', slot: 'done:s11' },
+  ])
 })
 
 // Mutation: only notify completed/max-tokens -> red (an interrupted turn is
@@ -348,4 +346,32 @@ test('cancelled question reports ASK_CANCELLED', async (t) => {
   await sleep(120)
   ac.abort()
   await assert.rejects(p, (e) => e && e.name === 'UserQuestionError' && e.code === 'ASK_CANCELLED')
+})
+
+// v2：必须绑定唯一设备，禁止广播。
+// Mutation: 退回「推给全部设备」→ red（同一事件在多台设备各弹一次）。
+test('multiple paired devices without a configured deviceId → no push, no claim', async (t) => {
+  const { ctx, relay } = await setup(t, {
+    online: true,
+    devices: [{ deviceId: 'ph_a' }, { deviceId: 'ph_b' }],
+  })
+  const out = await ctx.waterfall('approval/request', mkReq('s30', 'bash', 'c30'))
+  assert.equal(out, 'unavailable', 'must fall through to desktop, not claim')
+  await sleep(200)
+  assert.equal(relay.pushed.length, 0, 'must not broadcast')
+})
+
+// id 幂等：同一逻辑事件重复派发只推一次。
+// Mutation: 去掉 markSent → red。
+test('same logical event delivered twice → one push', async (t) => {
+  const { ctx, relay } = await setup(t, { online: true })
+  // 用 aborted：它不受 60s 完成冷却影响，能单独暴露「id 去重」这一层。
+  const ev = { type: 'turn/end', seq: 1, data: { turn: 7, reason: { kind: 'aborted' } } }
+  ctx.emit('session/event', { id: 's31' }, ev)
+  await sleep(150)
+  // 同一事件再来一次，但 seq 前进以绕过水位线（模拟重复派发）
+  ctx.emit('session/event', { id: 's31' }, { ...ev, seq: 2 })
+  await sleep(200)
+  const done = relay.pushed.filter((x) => x.message.kind === 'done')
+  assert.equal(done.length, 1, `expected one push, got ${done.length}`)
 })
