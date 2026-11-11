@@ -151,25 +151,26 @@ object NotifyBridge {
         val msg = JSONObject(json)
         val id = msg.optString("id")
         if (id.isEmpty()) return@execute
-        // 同一张卡（id 相同、ts 相同）只处理一次。done 卡用稳定 id 覆盖更新，
-        // ts 会变，所以必须带 ts 才能既去重又不挡正常更新。
-        val dedupeKey = "$id@${msg.optLong("ts")}"
-        if (seen.containsKey(dedupeKey)) return@execute
-        seen[dedupeKey] = true
+        // v2：id 是幂等键（不含 ts），同一逻辑事件只处理一次；slot 是展示槽位。
+        if (seen.containsKey(id)) {
+          logLine(ctx, "card dropped (duplicate id) id=$id")
+          return@execute
+        }
+        seen[id] = true
+        val slot = msg.optString("slot").ifEmpty { id }
         when (msg.optString("kind")) {
           "retract" -> {
-            cards.remove(id)
-            NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+            cards.remove(slot)
+            NotificationManagerCompat.from(ctx).cancel(slot.hashCode())
           }
           "approval", "question" -> {
-            cards[id] = msg
-            logLine(ctx, "card kind=${msg.optString("kind")} id=$id tool=${msg.optString("toolName")}")
-            showCard(ctx, id, msg)
+            cards[slot] = msg
+            logLine(ctx, "card kind=${msg.optString("kind")} id=$id slot=$slot tool=${msg.optString("toolName")}")
+            showCard(ctx, slot, id, msg)
           }
           "done" -> {
-            // 完成卡是提示，不是待办：不进 cards（无需 retract），也不带 action。
-            logLine(ctx, "card kind=done id=$id title=${msg.optString("title")}")
-            showCard(ctx, id, msg)
+            logLine(ctx, "card kind=done id=$id slot=$slot title=${msg.optString("title")}")
+            showCard(ctx, slot, id, msg)
           }
         }
       } catch (e: Exception) {
@@ -209,7 +210,7 @@ object NotifyBridge {
     }
   }
 
-  private fun showCard(ctx: Context, id: String, msg: JSONObject) {
+  private fun showCard(ctx: Context, notifyKey: String, answerId: String, msg: JSONObject) {
     val kind = msg.optString("kind")
     val tool = msg.optString("toolName")
     val reason = msg.optString("reason")
@@ -246,7 +247,7 @@ object NotifyBridge {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
       putExtra(EXTRA_SESSION, msg.optString("sessionId"))
     }
-    val openPi = PendingIntent.getActivity(ctx, id.hashCode(), open,
+    val openPi = PendingIntent.getActivity(ctx, notifyKey.hashCode(), open,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     // 审批卡在展开态补一行超时说明（设计 04 ① 的脚注）；收起态仍只显示 reason。
@@ -268,8 +269,8 @@ object NotifyBridge {
     if (kind == "done") builder.setOnlyAlertOnce(true)
 
     if (kind == "approval") {
-      builder.addAction(0, "允许一次", answerPi(ctx, id, "allowed-once"))
-      builder.addAction(0, "拒绝", answerPi(ctx, id, "rejected"))
+      builder.addAction(0, "允许一次", answerPi(ctx, answerId, "allowed-once"))
+      builder.addAction(0, "拒绝", answerPi(ctx, answerId, "rejected"))
     } else if (kind == "question") {
       // 一键选项：插件只在「单题、单选、1..3 个选项」时下发 options；
       // 其余提问 options 为空，点击卡片进 App 里作答。
@@ -280,14 +281,14 @@ object NotifyBridge {
           val label = opts.optString(i)
           if (label.isNotEmpty()) {
             val shown = if (label.length <= 24) label else label.take(24) + "…"
-            builder.addAction(0, shown, questionAnswerPi(ctx, id, qid, label))
+            builder.addAction(0, shown, questionAnswerPi(ctx, answerId, qid, label))
           }
         }
       }
     }
 
     try {
-      NotificationManagerCompat.from(ctx).notify(id.hashCode(), builder.build())
+      NotificationManagerCompat.from(ctx).notify(notifyKey.hashCode(), builder.build())
     } catch (e: SecurityException) {
       // POST_NOTIFICATIONS 被拒：降级为仅 App 内可见（cards 表仍在）。
       Log.w(TAG, "notification permission denied: ${e.message}")

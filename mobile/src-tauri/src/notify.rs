@@ -182,14 +182,15 @@ async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) -> u64
                     buf.drain(..pos + 2);
                     for line in frame.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
-                            if let Ok(v) = serde_json::from_str::<Value>(data) {
-                                if let Some(seq) = v.get("seq").and_then(|x| x.as_u64()) {
-                                    max_seq = max_seq.max(seq);
-                                }
+                            let parsed = serde_json::from_str::<Value>(data).ok();
+                            if let Some(seq) = parsed.as_ref().and_then(|v| v.get("seq")).and_then(|x| x.as_u64()) {
+                                max_seq = max_seq.max(seq);
                             }
                             if let Err(e) = push_to_kotlin(data) {
                                 // 卡片送达 relay 不等于手机弹卡：JNI 失败必须可观测。
                                 eprintln!("[dsh-notify] onCard failed: {e}");
+                            } else if let Some(card_id) = parsed.as_ref().and_then(|v| v.get("id")).and_then(|x| x.as_str()) {
+                                ack_card(card_id);
                             }
                         }
                     }
@@ -355,6 +356,29 @@ pub extern "system" fn Java_com_namelessric_dsh_1mobile_NotifyBridge_nativeAnswe
         match resp {
             Ok(r) => eprintln!("[dsh-notify] answer HTTP {}", r.status()),
             Err(e) => eprintln!("[dsh-notify] answer failed: {e}"),
+        }
+    });
+}
+
+/// 卡片已渲染：向 relay 确认，之后不再补投。
+fn ack_card(id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(conn) = slot().conn.lock().unwrap().clone() else { return };
+    let id = id.to_string();
+    tauri::async_runtime::spawn(async move {
+        let Ok(client) = crate::relay_client(&conn.relay_url) else { return };
+        let resp = client
+            .post(format!("{}/__dsh_tunnel__/notify/ack", conn.relay_url))
+            .header("X-DSH-Relay-Token", &conn.device_token)
+            .json(&json!({ "ids": [id] }))
+            .send()
+            .await;
+        if let Ok(r) = resp {
+            if !r.status().is_success() {
+                eprintln!("[dsh-notify] ack HTTP {}", r.status());
+            }
         }
     });
 }
