@@ -1,0 +1,38 @@
+[package]
+name = "dsh-mobile"
+version = "1.0.11"
+description = "dsh mobile access shell"
+authors = ["NameLess"]
+edition = "2021"
+license = "GPL-3.0-only"
+
+[lib]
+name = "dsh_mobile_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 应用内自动更新：Rust 侧下载 APK（rustls 避免交叉编译 openssl）+ SHA-256 校验
+# json feature：扫码配对命令收发 JSON body（pair_redeem/pair_refresh）。
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+sha2 = "0.10"
+tokio = { version = "1", default-features = false, features = ["fs", "io-util"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# JNI 桥：install_update 经 FileProvider 拉起系统安装器
+jni = "0.21"
+# 扫码配对：官方插件，Android 走 MLKit（CameraX 由插件自带）
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+incremental = false

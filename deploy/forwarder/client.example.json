@@ -1,0 +1,12 @@
+{
+  "serverAddr": "relay.example.com:7782",
+  "token": "REPLACE_WITH_THE_SAME_TOKEN_AS_SERVER",
+  "clientId": "home-dsh",
+  "forwards": [
+    { "name": "hindsight-api", "localAddr": "127.0.0.1:8888" },
+    { "name": "gateway-8326", "localAddr": "127.0.0.1:8326" }
+  ],
+  "dialTimeout": "10s",
+  "retryMin": "1s",
+  "retryMax": "30s"
+}

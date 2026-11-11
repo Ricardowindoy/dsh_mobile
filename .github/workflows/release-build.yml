@@ -1,0 +1,526 @@
+name: release-build
+
+# Multi-platform packager for dsh-mobile.
+#
+# Builds, on tag push `v*` (or manual dispatch):
+#   * Android  — release APK (arm64, signed) + AAB               [ubuntu-latest]
+#   * Windows  — NSIS installer (.exe)                           [windows-latest]
+#   * Linux    — .deb + .rpm + .AppImage                         [ubuntu-22.04]
+#   * macOS    — universal .dmg (arm64 + x86_64)                 [macos-latest]
+#   * iOS      — unsigned .ipa (arm64)                           [macos-latest]
+#
+# plus the Go tunnel data-plane binaries that ship through the same updater
+# channel (cmd/tunnel for linux/arm64, linux/amd64, darwin/arm64, windows/amd64).
+#
+# Uploads them as workflow artifacts AND to a GitHub Release. Job `manifest`
+# then assembles release/manifest.json in the exact shape scripts/release.sh
+# writes, so CI output is drop-in compatible with the Relay update endpoint
+# and the App's in-app updater.
+#
+# The private docs submodule (docs-repo / dsh_mobile-docs) is NEVER checked
+# out here: every checkout uses `submodules: false`, and neither build reads
+# from it.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create/update a GitHub Release (otherwise artifacts only)"
+        type: boolean
+        default: true
+      note:
+        description: "Extra release note (defaults to the tag name)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  android:
+    name: Android (arm64 APK + AAB)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: mobile/pnpm-lock.yaml
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      # Pin the runner image explicitly: it ships a preinstalled SDK layout.
+      # Do NOT use android-actions/setup-android here — its default
+      # `packages: tools` fails to resolve "tools" (that id belongs to the
+      # legacy SDK, not the cmdline-tools repo), and runners with newer
+      # cmdline-tools cannot downgrade to its pinned version.
+      - name: Configure Android SDK / NDK
+        run: |
+          set -eux
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          # Locate sdkmanager from whichever cmdline-tools dir exists, newest first.
+          SM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
+          [ -n "$SM" ] || { echo "::error::sdkmanager not found under $ANDROID_HOME"; exit 1; }
+          echo "Using $SM"
+          yes | "$SM" --licenses >/dev/null 2>&1 || true
+          "$SM" --install "ndk;26.1.10909125" "platforms;android-36" "build-tools;34.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/ndk/26.1.10909125" >/dev/null
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mobile/src-tauri
+
+      - name: Frontend deps + build
+        working-directory: mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Restore signing keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PROPS: ${{ secrets.ANDROID_KEYSTORE_PROPS }}
+        run: |
+          set -eu
+          if [ -z "${ANDROID_KEYSTORE_B64:-}" ] || [ -z "${ANDROID_KEYSTORE_PROPS:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PROPS secrets are required for a signed release APK"
+            exit 1
+          fi
+          mkdir -p mobile/android-keystore
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > mobile/android-keystore/dsh-release.jks
+          printf '%s\n' "$ANDROID_KEYSTORE_PROPS" > mobile/android-keystore/keystore.properties
+          # The committed-on-dev-machine copy carries an absolute storeFile path;
+          # rewrite it to this checkout so the same secret works on any runner.
+          python3 - <<'PY'
+          import pathlib, re, os
+          p = pathlib.Path("mobile/android-keystore/keystore.properties")
+          txt = p.read_text(encoding="utf-8")
+          target = os.path.abspath("mobile/android-keystore/dsh-release.jks")
+          if re.search(r"(?m)^storeFile=", txt):
+              txt = re.sub(r"(?m)^storeFile=.*$", "storeFile=" + target, txt)
+          else:
+              txt = "storeFile=" + target + "\n" + txt
+          p.write_text(txt, encoding="utf-8")
+          print("storeFile ->", target)
+          PY
+
+      - name: Tauri android build (arm64 release)
+        working-directory: mobile
+        run: pnpm tauri android build --target aarch64
+
+      - name: Capture APK + AAB
+        run: |
+          set -eux
+          .github/scripts/capture-release.sh android arm64 \
+            mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            mobile/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk
+          # App 的更新源约定（mobile-app/src/update-source.js）：资产名必须是
+          # app-arm64-release.apk。Tauri 产出的 universal 包统一改名。
+          if [ -f release/android/arm64/app-universal-release.apk ]; then
+            mv release/android/arm64/app-universal-release.apk release/android/arm64/app-arm64-release.apk
+          fi
+          .github/scripts/capture-release.sh android arm64-aab \
+            mobile/src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab \
+            mobile/src-tauri/gen/android/app/build/outputs/bundle/arm64Release/app-arm64-release.aab
+
+      # Gate: a CI build with the wrong keystore secret produces an APK that
+      # looks fine but cannot update any installed 0.1.19+ phone. Pin the
+      # signer certificate digest (the public half is already public in every
+      # APK) and fail before upload when it does not match.
+      - name: Verify APK signer identity
+        env:
+          EXPECTED_SIGNER_SHA256: "7443543d8dbe426745e575d97ae5a5bf6a1de2ebb8639d6c26d97a642be262ac"
+        run: |
+          set -u
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          [ -n "$APKSIGNER" ] || { echo "::error::apksigner not found under $ANDROID_HOME"; exit 1; }
+          echo "apksigner: $APKSIGNER ($("$APKSIGNER" version 2>&1 | head -1))"
+          shopt -s nullglob
+          apks=(release/android/arm64/*.apk)
+          [ "${#apks[@]}" -gt 0 ] || { echo "::error::no APK captured under release/android/arm64"; exit 1; }
+          for apk in "${apks[@]}"; do
+            echo "Verifying $apk"
+            out=$("$APKSIGNER" verify --print-certs "$apk" 2>&1)
+            rc=$?
+            echo "$out"
+            [ "$rc" -eq 0 ] || { echo "::error::$apk failed apksigner verify (rc=$rc)"; exit 1; }
+            # apksigner versions differ in formatting (colon-separated vs plain hex);
+            # normalise any 32-byte digest found anywhere in the output.
+            actual=$(printf '%s\n' "$out" | tr -d '\r' \
+              | grep -oiE '([0-9a-f]{2}:){31}[0-9a-f]{2}|[0-9a-f]{64}' \
+              | tr -d ':' | tr 'A-F' 'a-f' | head -1)
+            [ -n "$actual" ] || { echo "::error::$apk has no signer certificate digest in apksigner output"; exit 1; }
+            if [ "$actual" != "$EXPECTED_SIGNER_SHA256" ]; then
+              echo "::error::$apk signer mismatch: got $actual, expected $EXPECTED_SIGNER_SHA256"
+              exit 1
+            fi
+            echo "OK: $apk signer SHA-256 = $actual"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: release
+          if-no-files-found: error
+
+  windows:
+    name: Windows (exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: mobile/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mobile/src-tauri
+
+      - name: Frontend deps + build
+        working-directory: mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Tauri build
+        working-directory: mobile
+        run: pnpm tauri build
+
+      - name: Capture installer
+        shell: bash
+        run: |
+          set -eux
+          .github/scripts/capture-release.sh windows amd64 \
+            "mobile/src-tauri/target/release/bundle/nsis/*-setup.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: release
+          if-no-files-found: error
+
+  linux:
+    name: Linux (deb + rpm + AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: mobile/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system deps (webkit2gtk etc.)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev file rpm
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mobile/src-tauri
+
+      - name: Frontend deps + build
+        working-directory: mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Tauri build (deb + rpm + appimage)
+        working-directory: mobile
+        run: pnpm tauri build --bundles deb,rpm,appimage
+
+      - name: Capture bundles
+        run: |
+          set -eux
+          .github/scripts/capture-release.sh linux amd64 \
+            "mobile/src-tauri/target/release/bundle/deb/*.deb"
+          .github/scripts/capture-release.sh linux amd64-rpm \
+            "mobile/src-tauri/target/release/bundle/rpm/*.rpm"
+          .github/scripts/capture-release.sh linux amd64-appimage \
+            "mobile/src-tauri/target/release/bundle/appimage/*.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: release
+          if-no-files-found: error
+
+  macos:
+    name: macOS (universal dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: mobile/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mobile/src-tauri
+
+      - name: Frontend deps + build
+        working-directory: mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Tauri build (universal)
+        working-directory: mobile
+        run: pnpm tauri build --target universal-apple-darwin
+
+      - name: Capture dmg
+        run: |
+          set -eux
+          .github/scripts/capture-release.sh macos universal \
+            "mobile/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: release
+          if-no-files-found: error
+
+  ios:
+    name: iOS (unsigned ipa)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: mobile/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: mobile/src-tauri
+
+      - name: Frontend deps + build
+        working-directory: mobile
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # gen/apple/ is generated (not committed): init then build unsigned.
+      # Without an Apple Developer certificate the IPA is unsigned — it
+      # installs on jailbroken/sideload-resigned devices only. Add Apple
+      # signing secrets and drop --no-sign for a distributable build.
+      - name: Init iOS Xcode project
+        working-directory: mobile
+        env:
+          CI: "true"
+        run: pnpm tauri ios init --ci --skip-targets-install
+
+      - name: Tauri iOS build (device, unsigned)
+        working-directory: mobile
+        env:
+          CI: "true"
+        run: pnpm tauri ios build --target aarch64 --no-sign --ci
+
+      - name: Capture ipa
+        run: |
+          set -eux
+          .github/scripts/capture-release.sh ios arm64 \
+            "mobile/src-tauri/gen/apple/build/*/*.ipa"
+          # 明确资产名：未签名包，供 AltStore/SideStore/Sideloadly/TrollStore 自签
+          if [ -f release/ios/arm64/dsh-mobile.ipa ]; then
+            mv release/ios/arm64/dsh-mobile.ipa release/ios/arm64/dsh-mobile-unsigned.ipa
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-ios
+          path: release
+          if-no-files-found: error
+
+  tunnel:
+    name: Tunnel data-plane (Go, 4 targets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Cross-compile cmd/tunnel
+        run: |
+          set -eux
+          mkdir -p release/tunnel-linux/amd64 release/tunnel-linux/arm64 \
+                   release/tunnel-darwin/arm64 release/tunnel-windows/amd64
+          GOOS=linux   GOARCH=amd64 go build -trimpath -ldflags=-s -o release/tunnel-linux/amd64/dsh-tunnel-linux-amd64        ./cmd/tunnel
+          GOOS=linux   GOARCH=arm64 go build -trimpath -ldflags=-s -o release/tunnel-linux/arm64/dsh-tunnel-linux-arm64        ./cmd/tunnel
+          GOOS=darwin  GOARCH=arm64 go build -trimpath -ldflags=-s -o release/tunnel-darwin/arm64/dsh-tunnel-darwin-arm64      ./cmd/tunnel
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags=-s -o release/tunnel-windows/amd64/dsh-tunnel-windows-amd64.exe ./cmd/tunnel
+          : > release/.artifacts.tsv
+          for f in \
+            release/tunnel-linux/amd64/dsh-tunnel-linux-amd64 \
+            release/tunnel-linux/arm64/dsh-tunnel-linux-arm64 \
+            release/tunnel-darwin/arm64/dsh-tunnel-darwin-arm64 \
+            release/tunnel-windows/amd64/dsh-tunnel-windows-amd64.exe; do
+            plat=$(echo "$f" | cut -d/ -f2)
+            arch=$(echo "$f" | cut -d/ -f3)
+            base=$(basename "$f")
+            sum=$(sha256sum "$f" | cut -d' ' -f1)
+            printf '%s\t%s\t%s\t%s\n' "$plat" "$arch" "$base" "$sum" >> release/.artifacts.tsv
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-tunnel
+          path: release
+          if-no-files-found: error
+
+  manifest:
+    name: Assemble manifest + GitHub Release
+    needs: [android, windows, linux, macos, ios, tunnel]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dl
+
+      - name: Merge into release/ tree
+        run: |
+          set -eux
+          mkdir -p release
+          : > release/.artifacts.tsv
+          for d in dl/release-*/; do
+            cp -a "$d". release/ 2>/dev/null || true
+            if [ -f "$d.artifacts.tsv" ]; then cat "$d.artifacts.tsv" >> release/.artifacts.tsv; fi
+          done
+          echo "--- merged artifacts ---"
+          find release -type f \( -name '*.apk' -o -name '*.aab' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.dmg' -o -name 'dsh-tunnel-*' \) | sort
+          echo "--- tsv ---"
+          cat release/.artifacts.tsv
+
+      - name: Build manifest.json
+        run: |
+          set -eux
+          NOTE="${{ github.event.inputs.note }}"
+          if [ -z "$NOTE" ]; then NOTE="${GITHUB_REF_NAME}"; fi
+          python3 .github/scripts/build-manifest.py --note "$NOTE"
+          cat release/manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: release/manifest.json
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          TAG="${{ github.ref_type == 'tag' && github.ref_name || format('ci-{0}', github.run_number) }}"
+          TITLE="${{ github.ref_type == 'tag' && github.ref_name || format('CI build {0}', github.run_number) }}"
+          cat > release/RELEASE_NOTES.md <<EOF
+          Automated multi-platform build ($TAG).
+
+          - Android: app-arm64-release.apk (+ .aab)
+          - Windows: NSIS installer
+          - Linux: deb / rpm / AppImage
+          - macOS: universal dmg
+          - iOS: dsh-mobile-unsigned.ipa (self-sign with AltStore/SideStore/Sideloadly/TrollStore)
+          - Tunnel data plane: linux{amd64,arm64} / darwin-arm64 / windows-amd64
+          - manifest.json: updater manifest (same shape as scripts/release.sh)
+          EOF
+          # gh release upload is sequential and handles re-runs (--clobber),
+          # unlike softprops/action-gh-release which raced on 20+ assets and
+          # left the release as a draft.
+          FILES=$(find release -type f ! -name 'RELEASE_NOTES.md' ! -name '.*' | sort)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $FILES --clobber
+          else
+            gh release create "$TAG" $FILES --title "$TITLE" --notes-file release/RELEASE_NOTES.md --target "$GITHUB_SHA" --latest
+          fi

@@ -1,0 +1,42 @@
+{
+  "name": "@local/dsh-remote-access",
+  "version": "1.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Management plane for DSH remote access: switch controlled nodes and relay entrances, observe relay/probe and local services, host-install the dsh-tunnel data plane, on Linux (systemd) and Windows (services)",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "tunnel-install.mjs",
+    "http-stream.mjs",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "scripts": {
+    "test": "node --test test/plugin.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session"
+      ]
+    }
+  },
+  "dependencies": {
+    "undici": "^8.12.4"
+  }
+}

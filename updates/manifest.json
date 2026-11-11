@@ -1,0 +1,59 @@
+{
+    "items": [
+        {
+            "platform": "android",
+            "arch": "arm64",
+            "version": "1.0.0",
+            "filename": "app-arm64-release.apk",
+            "size": 7970358,
+            "sha256": "a47677fca2f7dc80bedb37eff3373ba53ea6bcbaacefc01ba0f6ba74e02d822a",
+            "releaseNote": "1.0.0 扫码配对 + 审批推送 + 多节点 + 更新通道（GitHub Release 优先，relay 兜底）",
+            "releaseAt": "2026-11-10",
+            "force": false
+        },
+        {
+            "platform": "tunnel-linux",
+            "arch": "amd64",
+            "version": "1.0.0",
+            "filename": "dsh-tunnel-linux-amd64",
+            "size": 6029474,
+            "sha256": "7488cb557304886d64c56c6507377f6b9b0c02ccb6bb9714bbe100a26ae8b30c",
+            "releaseNote": "dsh-tunnel data plane installer channel (cmd/tunnel)",
+            "releaseAt": "2026-11-08",
+            "force": false
+        },
+        {
+            "platform": "tunnel-linux",
+            "arch": "arm64",
+            "version": "1.0.0",
+            "filename": "dsh-tunnel-linux-arm64",
+            "size": 5636361,
+            "sha256": "d7dc15866dd7512061d0c8474fabbbb17f67b8275fd2fe139ae5792db5176f52",
+            "releaseNote": "dsh-tunnel data plane installer channel (cmd/tunnel)",
+            "releaseAt": "2026-11-08",
+            "force": false
+        },
+        {
+            "platform": "tunnel-darwin",
+            "arch": "arm64",
+            "version": "1.0.0",
+            "filename": "dsh-tunnel-darwin-arm64",
+            "size": 5679730,
+            "sha256": "80b225d2c1e4fe64f60613ab4008f180de6157750afef6d5b3c4f6fe51f95fae",
+            "releaseNote": "dsh-tunnel data plane installer channel (cmd/tunnel)",
+            "releaseAt": "2026-11-08",
+            "force": false
+        },
+        {
+            "platform": "tunnel-windows",
+            "arch": "amd64",
+            "version": "1.0.0",
+            "filename": "dsh-tunnel-windows-amd64.exe",
+            "size": 6169600,
+            "sha256": "a994eaa4fbcb65c82e55b90a3534ae009ea5c831e073493657b67abcc6eb065f",
+            "releaseNote": "dsh-tunnel data plane installer channel (cmd/tunnel)",
+            "releaseAt": "2026-11-08",
+            "force": false
+        }
+    ]
+}

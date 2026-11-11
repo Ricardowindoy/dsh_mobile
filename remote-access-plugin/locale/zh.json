@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "远程访问",
+    "description": "在设置页切换被控节点与 Relay 入口：查看每个节点的在线状态、relay/隧道状态与本机服务，支持 Linux（systemd）与 Windows（服务）。"
+  }
+}

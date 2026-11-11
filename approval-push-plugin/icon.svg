@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Globe arc + tunnel link: original artwork, single accent + neutrals -->
+  <circle cx="32" cy="32" r="22" fill="none" stroke="#5b8def" stroke-width="4"/>
+  <path d="M10 32h44M32 10c7 6 7 38 0 44M32 10c-7 6-7 38 0 44" fill="none" stroke="#5b8def" stroke-width="3" opacity="0.55"/>
+  <circle cx="18" cy="46" r="5" fill="#30a46c"/>
+  <circle cx="46" cy="46" r="5" fill="#5b8def"/>
+  <path d="M23 46h18" stroke="#30a46c" stroke-width="3" stroke-dasharray="4 3"/>
+</svg>

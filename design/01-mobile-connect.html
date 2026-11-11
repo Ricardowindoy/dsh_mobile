@@ -1,0 +1,1281 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-target="touch">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01 · 手机 App 连接页 · dsh_mobile Apple 三端</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./base.css">
+<style>
+/* =============================================================================
+ * 01 · 手机 App 连接页 —— 稿子自己的样式
+ * -----------------------------------------------------------------------------
+ * 只允许引用 tokens.css / base.css 已声明的 --set-*；颜色一律走 var()，
+ * 不写裸 hex / rgb() / 颜色关键字（闸门逐条查，含内联 style）。
+ * 不新增令牌名：需要新令牌属于 tokens.css 的事，本页无权定义。
+ *
+ * 与真实代码（mobile/src/index.html + styles.css）的类名映射：
+ *   .app-bar / .screen-main / .screen-stack / .large-title / .page-sub /
+ *   .field-tag / .field-has-action / .diag-row / .push-log-status /
+ *   .bottom-bar / .update-* / .status-box / .spinner / .status-text
+ *   —— 名字照抄真实代码，便于逐条对照
+ *   控件与骨架则用 base.css 的组件类：.chrome / .btn .btn--primary|secondary|ghost /
+ *   .btn--touch / .field-row（同行字段） / .group--fill（分组容器） /
+ *   .group-h（组标题） / .group-foot（组脚注） / .pill / .dot--ok|warn|bad /
+ *   .banner--bad / .card--panel / .sheet / .enter
+ *   落地时真实代码的 .btn-primary ≈ 稿子的 .btn.btn--primary.btn--touch。
+ *
+ *   ⚠ 密度这一版改了两处结构（原名不再存在）：
+ *     竖排字段 .field-group + .field__label → 同行 .field-row + .field-row__label
+ *     表单外壳 .card（浮起的砖）→ .group--fill（inset-grouped 分组）
+ *   真实代码落地时对应改名，不是新增功能。
+ *
+ * 三段式骨架（材质顶栏 / 主区 / 贴底材质栏）：主区居中用 .screen-stack{margin:auto 0}，
+ * 不用 justify-content:center —— 软键盘把视口压到 400px 高时，center 会把顶部内容
+ * 推到可滚动区之外（看不见也滚不回），而 auto 边距在空间不够时自动塌成 0。
+ * ========================================================================== */
+
+/* ---------- 导览页外壳（不是设备的一部分） ---------- */
+.wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; }
+.lede { margin: 10px 0 0; max-width: 74ch; font-size: 13px; line-height: 1.65;
+        letter-spacing: .006em; color: var(--set-text-2); }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+/* .pill 自带 color(--set-text-2)，所以 hover 要落在 .pill 上才压得住它 */
+.toc a { color: inherit; text-decoration: none; }
+.toc a:hover .pill { color: var(--set-brand-ink); }
+h2.sec { margin: 34px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .02em;
+         color: var(--set-text-2); }
+.devrow { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;
+          margin: 18px 0 0; }
+.devwrap { min-width: 0; }
+.device { margin: 0; }
+
+/* ---------- 设备框：写死视口 ---------- */
+.dev--a  { width: 390px; height: 844px; }   /* iPhone 15 / 主流 Android 档 */
+.dev--s  { width: 320px; height: 568px; }   /* SE 档小屏 */
+.dev--kb { width: 390px; height: 844px; }   /* 400 可视屏 + 444 键盘示意 */
+.screen { height: 100%; display: flex; flex-direction: column;
+          overflow: hidden; background: var(--set-bg); color: var(--set-text);
+          min-width: 0; }
+
+/* 状态栏条带：真机由原生 decorView 画（WebView 内 env(safe-area-inset-*) 恒为 0），
+   这里只是示意"条带基色必须等于 --set-bg"，不代表已验证。 */
+.statusbar { flex: 0 0 auto; display: flex; align-items: center;
+             justify-content: space-between; height: 22px; padding: 0 14px;
+             font-size: 11px; letter-spacing: .02em; color: var(--set-text-2);
+             background: var(--set-bg); }
+.statusbar .num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 顶栏 / 贴底栏（材质由 .chrome 提供） ---------- */
+.app-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+           min-height: 52px; padding: 10px 16px; }
+.logo-badge { flex: 0 0 auto; width: 32px; height: 32px; display: grid;
+              place-items: center; border-radius: var(--set-radius-sm);
+              background: var(--set-surface-2);
+              box-shadow: inset 0 0 0 1px var(--set-line); }
+.logo { width: 20px; height: 20px; display: block; }
+.app-name { flex: 1 1 auto; min-width: 0; font-family: var(--set-font-display);
+            font-size: 17px; font-weight: 600; letter-spacing: -0.016em;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-version { flex: 0 0 auto; padding: 3px 9px; font-size: 12px;
+               letter-spacing: .01em; font-variant-numeric: tabular-nums;
+               color: var(--set-text-2); border-radius: var(--set-radius-pill);
+               background: var(--set-surface-2);
+               box-shadow: inset 0 0 0 1px var(--set-line); }
+.bottom-bar { flex: 0 0 auto; display: flex; align-items: center;
+              justify-content: center; flex-wrap: wrap; gap: 6px 10px;
+              min-height: 52px; padding: 8px 16px; }
+
+/* ---------- 主区：剩余高度里居中（margin:auto 0，不用 justify-content） ---------- */
+.screen-main { flex: 1 1 auto; display: flex; flex-direction: column;
+               width: 100%; min-width: 0; padding: 4px 0 12px;
+               overflow-y: auto; }
+.screen-stack { width: 100%; margin: auto 0; display: flex;
+                flex-direction: column; gap: 10px; min-width: 0; }
+/* vw 在稿子里算的是浏览器视口而不是设备视口，所以设备内写死字号：
+   大标题固定 24px（小屏 22px、键盘态 22px）—— 不随屏宽缩放，
+   避免小屏被压到 20px 以下；落地代码同样用固定值，不再是 clamp。 */
+.large-title { margin: 0; font-family: var(--set-font-display);
+               font-size: 24px; font-weight: 700; line-height: 1.14;
+               letter-spacing: -0.022em; }
+.page-sub { margin: 2px 0 0; font-size: 13px; line-height: 1.4;
+            letter-spacing: .006em; color: var(--set-text-2); }
+
+/* ---------- 字段（同行版）----------
+ * 竖排字段（label 上 / input 下）已全部改成 .field-row（标签左、控件右）——
+ * 这是"移动端信息密度低"的主因：竖排时每个字段吃掉标签行+输入行+间距 ≈76px，
+ * 两个字段就占掉 390×844 屏的近三分之一。改成同行后每个字段 44px 一行。
+ * 说明文字（原来每个字段下面一句 .field__help）合并成分组脚注 .group-foot。 */
+.field { position: relative; display: flex; align-items: center; min-width: 0; }
+.field-tag { flex: 0 0 auto; padding: 1px 6px; font-size: 11px; font-weight: 500;
+             letter-spacing: .02em; color: var(--set-text-2);
+             border-radius: var(--set-radius-sm); background: var(--set-surface-2); }
+.field-has-action .field__input { padding-right: 52px; }  /* 真实码 48px：命中区 40→44 后同步放宽 */
+.field-action { position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+                width: 44px; height: 44px; display: grid; place-items: center;
+                padding: 0; margin: 0; border: 0; border-radius: var(--set-radius-sm);
+                color: var(--set-text-2); background: transparent;
+                cursor: pointer; touch-action: manipulation; }
+/* 同行字段里的控件：右侧动作按钮占位，行内输入右对齐。
+ * 实测：44px 的行内眼睛按钮把 44px 的行撑到 56px —— 行内按钮视觉收到 32px，
+ * 命中区用 ::before 补回 44×44（视觉小、命中不缩水）。 */
+.field-row .field-action { position: static; transform: none; flex: 0 0 auto;
+                           width: 32px; height: 32px; }
+.field-row .field-action::before { content: ""; position: absolute;
+                                   inset: -6px; }
+.field-row:has(.field-action) .field__input { padding-right: 40px; }
+/* 行内输入：去掉自身底色/描边（分组已是容器），只留右对齐的文字 */
+.field-row .field__input {
+  background: transparent; border: 0; border-radius: 0;
+  box-shadow: none;                       /* base.css 的 inset 描边在这里是画蛇添足 */
+  padding: 6px 0; line-height: 20px; text-align: right;
+  color: var(--set-text-2);
+}
+.field-row .field__input:focus { background: transparent; }
+.field-row .field__input.is-focused {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--set-brand), 0 0 0 4px var(--set-ring);
+  border-radius: var(--set-radius-sm);
+}
+
+/* ---------- 扫码配对（0.1.19 新主路径） ----------
+ * 真实代码：mobile/src/index.html 的 #scan-pair（btn-primary 全宽）+ 组脚注。
+ * 手输 token 降级为救急路径：组标题改「手动连接（救急）」。
+ * 扫描/兑换中 = 按钮 disabled + 文案换「扫描中…/配对中…」（真实 main.js 行为）；
+ * 陌生 host 确认是原生 confirm（稿里画成 banner--warn + 两个动作示意）。 */
+.scan-note { margin: 8px 0 0; }
+.scan-confirm { display: flex; flex-direction: column; gap: 10px; }
+.scan-confirm__host { font-family: var(--set-font-mono); font-size: 13px;
+                      overflow-wrap: anywhere; }
+.scan-confirm__actions { display: flex; gap: 10px; }
+.scan-confirm__actions .btn { flex: 1 1 0; min-width: 0; }
+
+/* ---------- 动作按钮 ---------- */
+.btn--with-icon { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn--with-icon svg { flex: 0 0 auto; }
+.btn--block { width: 100%; margin: 16px 0 0; }
+.banner + .btn--block { margin-top: 12px; }   /* 错误提示离主按钮更近一档 */
+.error svg { flex: 0 0 auto; margin-top: 1px; }
+
+/* 图形化动作按钮（用户定：动作一律图形，不用文字按钮）：46 视觉、图标 18，
+   品牌色，语义在 aria-label；旧 .btn--ghost 文字动作在 App 页不再使用。 */
+.icon-btn {
+  flex: 0 0 auto; position: relative;
+  display: inline-grid; place-items: center;
+  width: 44px; height: 44px; padding: 0; margin: 0;
+  color: var(--set-brand-ink); background: transparent; border: 0;
+  border-radius: var(--set-radius-sm); cursor: pointer; touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out), opacity var(--set-dur-press) var(--set-ease-out);
+}
+.icon-btn svg { display: block; }
+.icon-btn:active { transform: scale(var(--set-press-scale)); }
+.icon-btn[disabled] { opacity: .45; cursor: default; transform: none; }
+.icon-btn:focus-visible { outline: 2px solid var(--set-brand); outline-offset: 2px; }
+
+/* ---------- 连接自检行：动作与结果同一基线 ---------- */
+.diag-row { display: flex; flex-wrap: wrap; align-items: center;
+            justify-content: space-between; gap: 6px 10px; margin-top: 12px;
+            min-height: 44px; }
+.push-log-status { font-size: 12px; line-height: 1.45; letter-spacing: .01em;
+                   color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.push-log-status[data-tone="ok"] { color: var(--set-ok-ink); }
+.push-log-status[data-tone="warn"] { color: var(--set-warn-ink); }
+.push-log-status[data-tone="bad"] { color: var(--set-danger-ink); }
+.check { display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto;
+         min-width: 0; }
+
+/* ---------- 连接自检结果：一条事实一枚胶囊（2026-11-08 控件规范 .wb-badge） ----------
+ * 与真实代码 mobile/src/styles.css 的 .wb-badge 同值。控件骨架 = 用户给的
+ * .wb-badge：12px/500、--set-radius-sm 圆角、色点 currentColor、ink 承载语义、
+ * 染底 + 30% 描边。染底 alpha 沿用派生档（0.04/0.05）而非控件的 12%：
+ * chrome100 禁 color-mix，且官方 ink 在 12% 染底上对比跌破 4.5（gen-tokens
+ * 派生断言会拦）。颜色只是冗余编码：所有胶囊都有文字，不靠颜色猜。 */
+.status-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+                min-width: 0; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px;
+               padding: 3px 10px; border-radius: var(--set-radius-sm);
+               background: var(--set-surface-2); color: var(--set-text-2);
+               font-size: 12px; font-weight: 500; line-height: 1.6;
+               letter-spacing: .01em; border: 1px solid var(--set-line);
+               min-width: 0; overflow-wrap: anywhere; }
+.status-pill i { width: 6px; height: 6px; border-radius: 999px;
+                 background: currentColor; flex: 0 0 auto; }
+.status-pill--ok { color: var(--set-ok-ink); background: var(--set-surface-2);
+                   border-color: var(--set-ok-line); }
+.status-pill--warn { color: var(--set-warn-ink); background: var(--set-warn-tint);
+                     border-color: var(--set-warn-line); }
+.status-pill--bad { color: var(--set-danger-ink); background: var(--set-danger-tint);
+                    border-color: var(--set-danger-line); }
+
+/* ---------- 更新卡片：面板层级（18px）+ 从底部升起（sheet 语义） ----------
+   抬起阴影显式写在这里（base.css 也有一份）：它曾经多一个右括号，整条声明
+   被浏览器静默丢弃 —— 稿子里能看出这一层是否真的存在。 */
+.update-card { padding: 18px; border-radius: var(--set-radius-panel);
+               box-shadow: var(--set-shadow-lift);
+               animation: enter-sheet var(--set-spring-response-sheet)
+                          var(--set-ease-sheet) both;
+               animation-delay: var(--set-stagger); }
+.update-title { margin: 0 0 4px; font-family: var(--set-font-display);
+                font-size: 17px; font-weight: 600; line-height: 1.2;
+                letter-spacing: -0.016em; }
+.update-title .num { font-variant-numeric: tabular-nums; }
+.update-meta { margin: 0; font-size: 12px; letter-spacing: .01em;
+               font-variant-numeric: tabular-nums; color: var(--set-text-2); }
+.update-note { margin: 10px 0 0; font-size: 13px; line-height: 1.5;
+               color: var(--set-text-2); white-space: pre-wrap;
+               overflow-wrap: anywhere; }
+.update-actions { display: flex; gap: 10px; margin-top: 14px; }
+.update-actions .btn { flex: 1 1 0; min-width: 0; }
+
+/* ---------- 连接中（#status 整屏）：这里可以用 justify-content:center ——
+   单块小内容、没有键盘、没有溢出可能；三段式的禁忌只适用于设置页主区。
+   状态栏条带由原生画，它不属于这块居中内容，所以它是兄弟节点而不是居中项。 */
+.status-stage { flex: 1 1 auto; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; padding: 16px; }
+.status-box { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.spinner { width: 32px; height: 32px; border: 2.5px solid var(--set-line);
+           border-top-color: var(--set-brand); border-radius: 50%;
+           animation: spin .9s linear infinite; }
+.status-text { margin: 0; font-size: 15px; letter-spacing: -0.003em;
+               color: var(--set-text-2); }
+
+/* ---------- 键盘弹起：可视区 390×400，说明文字让位给输入 ---------- */
+.screen--vis { height: 400px; flex: 0 0 auto; }
+.screen--vis .large-title { font-size: 22px; }
+.screen--vis .page-sub { display: none; }
+/* 键盘态收紧：分组内距收窄、脚注收起 —— 一屏 400px 要装下标题+两字段+按钮 */
+.screen--vis .group--fill { border-radius: var(--set-radius-sm); }
+.screen--vis .group-foot { display: none; }
+.screen--vis .screen-main { padding-top: 0; }
+.screen--vis .screen-stack { margin-top: 12px; }
+.kbwrap { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.kb { flex: 0 0 auto; height: 444px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 10px; padding: 16px;
+      border-top: 1px solid var(--set-line); background: var(--set-surface-2); }
+.kb__cap { display: grid; grid-template-columns: repeat(9, 28px); gap: 5px; }
+.kb__cap i { height: 34px; border-radius: 6px; background: var(--set-surface);
+             box-shadow: inset 0 0 0 1px var(--set-line); }
+.kb__wide { width: 256px; height: 34px; border-radius: 6px;
+            background: var(--set-surface); box-shadow: inset 0 0 0 1px var(--set-line); }
+.kb__note { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2);
+            text-align: center; }
+
+/* ---------- 小屏（320×568）：主区可滚，字段完整可用 ---------- */
+.dev--s .large-title { font-size: 22px; }
+/* 小屏的同行字段更紧：320px 宽放不下"标签 + 输入"两边都要呼吸 */
+.dev--s .field-row { gap: 8px; padding: 6px 12px; }
+.dev--s .field-row__label { font-size: 14px; }
+.dev--s .field-row .field__input { font-size: 14px; }
+
+/* ---------- 减弱动态 ≠ 关掉反馈 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .update-card { animation-duration: .01ms; }
+  .spinner { animation: spin 1.6s linear infinite; }
+}
+
+/* ---------- 文末说明表 ---------- */
+.note { margin: 14px 0 0; font-size: 12px; line-height: 1.6; color: var(--set-text-2); }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--set-line);
+         min-width: 0; vertical-align: top; overflow-wrap: anywhere; }
+th { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); font-weight: 600; }
+td code { font-family: var(--set-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1 class="t-large-title">01 · 手机 App 连接页</h1>
+  <p class="lede">这是稿子的导览页，不是设备本身：每台「设备」是一个写死视口的框，框内就是
+    <code>mobile/src/index.html</code> 那张真实连接页的排版与状态。三段式骨架（材质顶栏 /
+    主区 / 贴底材质栏）、字段、自检行、错误与更新卡都按现有代码来，不发明功能。
+    颜色只有 <code>--set-*</code> 一个来源：浅色是 apple 原文，深色是官方 palette
+    <code>apple-night</code>，同一页并排对照（深色那台的框上挂 <code>data-theme="dark"</code>）。</p>
+
+  <div class="toc">
+    <a class="pill" href="#d1">① 默认态</a>
+    <a class="pill" href="#d2">② 深色同页</a>
+    <a class="pill" href="#d3">③ 错误态</a>
+    <a class="pill" href="#d4">④ 自检三态</a>
+    <a class="pill" href="#d5">⑤ 更新卡</a>
+    <a class="pill" href="#d6">⑥ 键盘弹起</a>
+    <a class="pill" href="#d7">⑦ 320 小屏</a>
+    <a class="pill" href="#d8">⑧ 连接中</a>
+    <a class="pill" href="#d9">⑨ 扫码配对态</a>
+    <a class="pill" href="#diff">差异 / 待验证</a>
+  </div>
+
+  <h2 class="sec" id="d1">① 390×844 · 浅色 · 默认态（真实 id 契约挂在这一台）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · 首次进入：两个空字段 + 主按钮 + 连接自检行</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span id="app-version" class="app-version">v0.1.19</span>
+          </header>
+
+          <!-- 三段式骨架：材质顶栏 / 主区 / 贴底材质栏。主区的垂直居中挂在
+               .screen-stack 的 margin:auto 0 上，而不是 .screen-main 的
+               justify-content:center —— 键盘把视口压到 400px 高时，center 会把
+               标题与第一个字段推到可滚动区之外（既看不见也滚不回来），而 auto
+               边距在空间不足时自己塌成 0，内容退回顶部、字段保持可达。 -->
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+
+              <!-- 扫码配对（0.1.19 主路径）：真实 #scan-pair。一次性 code 经 Rust
+                   POST 兑换，设备 token 不进 URL。非 Android Tauri 环境整段隐藏。 -->
+              <section class="enter">
+                <button id="scan-pair" class="btn btn--primary btn--touch btn--block btn--with-icon" type="button">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span id="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+
+                <!-- 提交入口挂在 form：软键盘回车（Go）与按钮走同一条路径，
+                     既不会"回车没反应"，也不会按钮 + 回车双重提交 -->
+                <form id="connect-form" novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label" for="relay-url">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input id="relay-url" class="field__input" type="url"
+                             placeholder="https://relay.example.com" autocomplete="url"
+                             inputmode="url" autocapitalize="none" autocorrect="off"
+                             spellcheck="false" enterkeyhint="next">
+                    </div>
+                  </div>
+
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub" for="access-token">
+                      <span>访问 token</span><span class="field-tag">可选</span>
+                    </label>
+                    <div class="field field-has-action field-row__control">
+                      <input id="access-token" class="field__input" type="password"
+                             placeholder="留空则不发送 token" autocomplete="off"
+                             autocapitalize="none" spellcheck="false" enterkeyhint="go">
+                      <button id="token-toggle" class="field-action" type="button"
+                              aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  <p id="error" class="banner banner--bad error" role="alert" hidden>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span id="error-text"></span>
+                  </p>
+
+                  <button id="connect" class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+
+                  <!-- 自检只打 Relay 控制面（不碰设备）：把"地址/网络/token 有问题"
+                       与"隧道设备离线"分开 —— 前者 bad，后者 warn，不是同一个红 -->
+                  <div class="diag-row">
+                    <button id="self-check" class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span id="self-check-status" class="status-pills" hidden></span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+
+              <section id="update" class="card card--panel sheet update-card" hidden>
+                <p class="update-title">发现新版本 <span id="update-version" class="num"></span></p>
+                <p id="update-meta" class="update-meta"></p>
+                <p id="update-note" class="update-note"></p>
+                <div class="update-actions">
+                  <button id="update-later" class="icon-btn" type="button" aria-label="跳过此版本" title="跳过此版本"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                  <button id="update-download" class="btn btn--primary btn--touch btn--with-icon" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>下载更新</span></button>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="bottom-bar chrome chrome--bottom">
+            <button id="push-log" class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span id="push-log-status" class="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <h2 class="sec" id="d2">② 390×844 · 深色 · 同一页（apple-night）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 深色 · 与①同一份 DOM：外层挂 data-theme="dark"，令牌整层换值</p>
+      <div class="device dev--a" data-theme="dark">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version" data-contract="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form data-contract="connect-form" novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" placeholder="https://relay.example.com" data-contract="relay-url">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" placeholder="留空则不发送 token" data-contract="access-token">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token" data-contract="token-toggle">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <p class="banner banner--bad error" role="alert" hidden data-contract="error">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span>无法连接 Relay，请检查网络与地址</span>
+                  </p>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" data-contract="self-check" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="status-pills check" data-contract="self-check-status">
+                      <span class="status-pill"><i></i>Relay 可达 132ms</span>
+                      <span class="status-pill"><i></i>免 token</span>
+                      <span class="status-pill status-pill--ok"><i></i>设备在线</span>
+                    </span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" data-contract="push-log" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" data-contract="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">390×844 · 深色 · 已填内容 + 错误态：danger 在 night 档是 #ff453a，染底由 surface 混色</p>
+      <div class="device dev--a" data-theme="dark">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <p class="banner banner--bad error" role="alert">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span>无法连接 Relay，请检查网络与地址</span>
+                  </p>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="push-log-status" hidden></span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d3">③ 390×844 · 浅色 · 错误态（#error 可见）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · 连接失败：错误贴在触发动作上方，读起来属于这次点击</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- 真实文案来自 main.js probeToken() 的 catch：
+                       "无法连接 Relay，请检查网络与地址" -->
+                  <p class="banner banner--bad error" role="alert">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    <span>无法连接 Relay，请检查网络与地址</span>
+                  </p>
+
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="push-log-status" hidden></span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" data-tone="bad">推送失败</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d4">④ 390×844 · 浅色 · 连接自检三态（可达且在线 / 可达但离线 = warn / 不可达）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">自检 ①/③ · 可达且设备在线 → dot--ok（--set-ok）</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:16</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="status-pills check">
+                      <span class="status-pill"><i></i>Relay 可达 118ms</span>
+                      <span class="status-pill"><i></i>需要 token</span>
+                      <span class="status-pill status-pill--ok"><i></i>设备在线</span>
+                    </span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" data-tone="ok">日志已推送到服务器</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">自检 ②/③ · 可达但设备离线 → dot--warn + --set-warn（网络通、链路断，不是失败）</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:16</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <!-- 落地的 warn 档：设备离线 = 网络通、链路断，用琥珀胶囊，
+                         不是 danger（红只留给请求失败）。 -->
+                    <span class="status-pills check">
+                      <span class="status-pill"><i></i>Relay 可达 141ms</span>
+                      <span class="status-pill"><i></i>免 token</span>
+                      <span class="status-pill status-pill--warn"><i></i>设备离线（tunnel 没连上）</span>
+                    </span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">自检 ③/③ · 不可达 → dot--bad（--set-danger），与②的区别只在"链路"还是"网络"</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:16</span><span>LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="status-pills check">
+                      <span class="status-pill status-pill--bad"><i></i>无法连接 Relay（8004ms）：检查网络与地址</span>
+                    </span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" data-tone="bad">推送失败</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d5">⑤ 390×844 · 浅色 · 更新卡片态（面板层级 18px + sheet 升起语义）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · #update 可见：主卡在后、更新卡在前一条事实（stagger 50ms）</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:17</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="push-log-status" hidden></span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+
+              <!-- 稿子画的是 HTML 初值那一档标签；真机上 presentUpdate() 会立刻
+                   startAutoUpdate()，标签随即变「下载中…/跳过此版本」，之后是
+                   「立即安装」/「重试下载」。逐档文案见文末差异表。 -->
+              <section class="card card--panel sheet update-card">
+                <p class="update-title">发现新版本 <span class="num">v0.2.0</span></p>
+                <p class="update-meta">2026-11-04 · 8.4 MB</p>
+                <p class="update-note">正在后台下载更新包…</p>
+                <div class="update-actions">
+                  <button class="icon-btn" type="button" aria-label="跳过此版本" title="跳过此版本"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                  <button class="btn btn--primary btn--touch btn--with-icon" type="button"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>下载更新</span></button>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d6">⑥ 键盘弹起：可视视口 390×400（.page-sub 让位，聚焦字段不被裁、不推出可滚动区）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×400 可视 + 444 键盘示意 · adjustResize 压矮 WebView：说明文字让位、内容退回顶部，主按钮一屏放不下但可滚到</p>
+      <div class="device dev--kb">
+        <div class="kbwrap">
+          <div class="screen--vis screen">
+            <div class="statusbar"><span class="num">20:18</span><span>WiFi · LTE</span></div>
+            <header class="app-bar chrome chrome--top">
+              <span class="logo-badge">
+                <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+              </span>
+              <span class="app-name">dsh</span>
+              <span class="app-version">v0.1.19</span>
+            </header>
+            <div class="screen-main">
+              <div class="screen-stack">
+                <p class="large-title">连接 dsh</p>
+                <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+                <section class="enter">
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                    <span data-contract="scan-pair-label">扫码配对</span>
+                  </button>
+                  <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+                </section>
+                <section class="enter enter--2">
+                  <div class="group-h">手动连接（救急）</div>
+                  <div class="group group--fill">
+                  <form novalidate autocomplete="off">
+                    <div class="field-row">
+                      <label class="field-row__label">Relay 地址</label>
+                      <div class="field field-row__control">
+                        <input class="field__input is-focused" type="url" value="https://relay.example.com">
+                      </div>
+                    </div>
+                    <div class="field-row">
+                      <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                      <div class="field field-has-action field-row__control">
+                        <input class="field__input" type="password" placeholder="留空则不发送 token">
+                        <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                      </div>
+                    </div>
+                    <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                    <div class="diag-row">
+                      <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                      <span class="push-log-status" hidden></span>
+                    </div>
+                  </form>
+                  </div><!-- /group -->
+                  <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                </section>
+              </div>
+            </div>
+            <div class="bottom-bar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+              <span class="push-log-status" hidden></span>
+            </div>
+          </div>
+
+          <!-- 键盘不是这个 WebView 的内容：真实代码靠 adjustResize 缩 WebView 高度，
+               CSS 拿不到键盘本身。这里画出来只为说明"压矮"这件事发生在哪。 -->
+          <div class="kb" aria-hidden="true">
+            <div class="kb__cap"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="kb__cap"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="kb__cap"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="kb__wide"></div>
+            <p class="kb__note">软键盘（原生层，不在 WebView 内）· enterkeyhint：地址=next，token=go</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d7">⑦ 320×568 · 小屏（SE 档）：主区可滚，字段与按钮不被裁</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">320×568 · 浅色 · 小屏：大标题取 clamp 下限 26px，自检行折成两行仍 ≥44px 命中</p>
+      <div class="device dev--s">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:19</span><span>LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                <form novalidate autocomplete="off">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" value="https://relay.example.com">
+                    </div>
+                  </div>
+                  <div class="field-row">
+                    <label class="field-row__label field-row__label--sub"><span>访问 token</span><span class="field-tag">可选</span></label>
+                    <div class="field field-has-action field-row__control">
+                      <input class="field__input" type="password" value="dsh-tunnel-9f3a">
+                      <button class="field-action" type="button" aria-label="显示或隐藏 token">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  <div class="diag-row">
+                    <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                    <span class="status-pills check">
+                      <span class="status-pill"><i></i>Relay 可达 204ms</span>
+                      <span class="status-pill"><i></i>免 token</span>
+                      <span class="status-pill status-pill--ok"><i></i>设备在线</span>
+                    </span>
+                  </div>
+                </form>
+                </div><!-- /group -->
+                <p class="group-foot">手动连接：地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            <span class="push-log-status" hidden></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d8">⑧ 连接中态（#status 整屏；#setup 此时 hidden）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · #setup hidden / #status 可见 —— 真实代码靠 [hidden]{display:none!important} 压过 flex，否则两屏同挂</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:20</span><span>WiFi · LTE</span></div>
+          <div class="status-stage">
+            <div class="status-box">
+              <span class="spinner" aria-hidden="true"></span>
+              <p class="status-text">正在连接 dsh…</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="d9">⑨ 扫码配对态（0.1.19 新增）：扫描中 / 陌生 host 确认 / 码已失效</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · 扫描中：按钮 disabled + 文案换「扫描中…」，相机由插件全屏接管（这里只画按钮态）</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" disabled data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫描中…</span>
+                </button>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+              <section class="enter enter--2">
+                <div class="group-h">手动连接（救急）</div>
+                <div class="group group--fill">
+                  <div class="field-row">
+                    <label class="field-row__label">Relay 地址</label>
+                    <div class="field field-row__control">
+                      <input class="field__input" type="url" placeholder="https://relay.example.com">
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · 陌生 host：原生 confirm（防钓鱼 QR）。这里画成语义等价的 banner + 双动作示意；真实文案逐字来自 main.js</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <section class="enter">
+                <div class="banner banner--warn scan-confirm">
+                  <p style="margin:0">二维码指向陌生服务器：</p>
+                  <p class="scan-confirm__host" style="margin:0">relay.example-unknown.net</p>
+                  <p style="margin:0">确认要向它配对吗？</p>
+                  <div class="scan-confirm__actions">
+                    <button class="btn btn--secondary btn--touch" type="button">取消</button>
+                    <button class="btn btn--primary btn--touch" type="button">确认配对</button>
+                  </div>
+                </div>
+                <p class="group-foot scan-note">已知入口（IP 直连 / 域名）与手填过的地址直接放行，不弹这一屏。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">390×844 · 浅色 · 码已失效：redeem 404 的错误文案（#error 槽位，排版与③相同）</p>
+      <div class="device dev--a">
+        <div class="screen">
+          <div class="statusbar"><span class="num">20:15</span><span>WiFi · LTE</span></div>
+          <header class="app-bar chrome chrome--top">
+            <span class="logo-badge">
+              <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+            </span>
+            <span class="app-name">dsh</span>
+            <span class="app-version">v0.1.19</span>
+          </header>
+          <div class="screen-main">
+            <div class="screen-stack">
+              <p class="large-title">连接 dsh</p>
+              <p class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+              <section class="enter">
+                <button class="btn btn--primary btn--touch btn--block btn--with-icon" type="button" data-contract="scan-pair">
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+                  <span data-contract="scan-pair-label">扫码配对</span>
+                </button>
+                <p class="banner banner--bad error" role="alert" style="margin-top:12px">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <span>配对码已过期或已被使用，请在桌面刷新二维码</span>
+                </p>
+                <p class="group-foot scan-note">桌面 dsh → 设置 → 远程访问 → 扫码配对手机，生成二维码后扫它。</p>
+              </section>
+            </div>
+          </div>
+          <div class="bottom-bar chrome chrome--bottom">
+            <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="diff">与真实代码的差异 / 待验证</h2>
+  <div class="card">
+    <table>
+      <tr><th>项</th><th>真实代码现状</th><th>这张稿子的做法</th><th>为什么 / 怎么落地</th></tr>
+      <tr>
+        <td><strong>扫码配对（0.1.19）</strong></td>
+        <td><code>#scan-pair</code> 主按钮 + 组脚注；<code>main.js</code> 扫码态文案「扫描中…/配对中…」；陌生 host 原生 <code>confirm</code>；redeem 404 →「配对码已过期或已被使用，请在桌面刷新二维码」；非 Android Tauri 环境整段隐藏</td>
+        <td>①–⑧ 每台设备都加了扫码主路径；⑨ 画扫描中 / 陌生 host / 码失效三态。陌生 host 那屏是语义示意（真实是系统 confirm，不是页面内 banner）</td>
+        <td>手输 token 降级为「手动连接（救急）」分组，id 契约不变；设备 token 全程不进 URL（redeem POST body + 一次性 ticket），稿子里不出现任何凭据字样。</td>
+      </tr>
+      <tr>
+        <td>深色数值</td>
+        <td><strong>已落地</strong>：<code>styles.css</code> 的 <code>@media (prefers-color-scheme: dark)</code> 已换官方 palette <code>apple-night</code>：画布 <code>#0d0d0f</code>、控件底 <code>#26262a</code>、brand <code>#3d9dff</code> 且按钮文字 <code>#041e33</code>（不再用白字）、材质 <code>rgba(28,28,30,.72)</code>、line <code>#3a3a3e</code>；<code>values-night/colors.xml</code> 的 canvas 同步 <code>#FF0D0D0F</code>（原先 <code>#FF000000</code> 比页面黑一档，启动瞬间有接缝）</td>
+        <td>与 App 现在的代码逐值一致（落地清单 A1/A2/A5/A6 已执行并实测：浏览器双档对比违规 0）</td>
+        <td>深色是独立 palette，不是自由发挥。白字压 <code>#3d9dff</code> 不足 4.5:1，官方靠近黑文字过 AA，所以 <code>--set-brand-on</code> 必须一起换。</td>
+      </tr>
+      <tr>
+        <td>自检「设备离线」</td>
+        <td>tone 缺省 → 中性灰文字，只有文案里的 ⚠️</td>
+        <td><code>.dot--warn</code> + <code>data-tone="warn"</code>（<code>--set-warn</code>）</td>
+        <td>A4：网络通、链路断既不是成功也不是失败。颜色 + 文字一起表达，不只靠颜色。</td>
+      </tr>
+      <tr>
+        <td><code>--set-text-3</code></td>
+        <td>被删（当时认为小字过不了 AA）</td>
+        <td>不直接收录；placeholder 走派生档 <code>--set-placeholder</code>（浅 = 官方 text-3 原值 <code>#86868b</code>，深 = text-3/text-2 逐通道中点 <code>#88888d</code>，压 <code>#26262a</code> 4.27:1）；弱标注仍 <code>--set-text-2</code></td>
+        <td>A3：官方 palette 恢复了它，但它本身压 surface-2 只有 2.97，够不到"提示文字 ≥3"的自设线，所以派生一档而不是直接用。</td>
+      </tr>
+      <tr>
+        <td><strong>信息密度</strong></td>
+        <td>竖排字段（label 在上、input 在下），每字段 = 标签行 + 输入行 + 6px 间距 ≈ 76px；两个字段就吃掉近 1/3 屏。页面上另有大标题 29px + 副标题 + 卡片标题 17px + 卡片说明 13px 四级文字堆叠。</td>
+        <td>字段改<b>同行</b>（<code>.field-row</code>：标签左、输入右，每字段 44px 一行）；大标题降到 24px；说明合并进分组脚注（<code>.group-foot</code>）一行 12px；表单不再包"浮起的卡片"，改 inset-grouped 分组（<code>.group--fill</code>）。</td>
+        <td>Apple 的设置页骨架就是同行 + 分组。竖排是"表单页"思维，设置页要的是"一屏能看完"。这一屏现在能同时看到：标题 + 分组 + 两个字段 + 主按钮 + 自检行（原来只有标题 + 一个卡片）。</td>
+      </tr>
+      <tr>
+        <td>类名</td>
+        <td><code>.btn-primary</code> / <code>.field input</code> / <code>.error</code> / <code>.btn-ghost</code></td>
+        <td><code>.btn.btn--primary.btn--touch</code> / <code>.field__input</code> / <code>.banner.banner--bad</code> / <code>.icon-btn</code>（结构类名照抄真实代码）</td>
+        <td>控件走 base.css 组件层，结构类保持原名为逐条对照；落地时两种命名都行，闸门只认令牌与几何。</td>
+      </tr>
+      <tr>
+        <td>id 唯一性</td>
+        <td>一页一屏，<code>relay-url</code>/<code>access-token</code>/<code>connect</code>/<code>self-check</code>/<code>push-log</code>/<code>error</code>/<code>update</code> 各一个</td>
+        <td>只有①号设备用真实 <code>id</code>，其余 8 屏用 <code>data-contract="同名"</code> 标记同一契约</td>
+        <td>这一页并排画 9 个设备框，HTML 里 id 必须唯一；契约名保持一致即可逐条比对。</td>
+      </tr>
+      <tr>
+        <td>更新卡首帧</td>
+        <td>HTML 初值 <code>稍后更新</code> / <code>下载更新</code>；<code>presentUpdate()</code> 立刻 <code>startAutoUpdate()</code> → 实际首屏是 <code>下载中…</code>（主按钮 hidden）+ <code>跳过此版本</code>，之后 <code>立即安装</code> / <code>重试下载</code>；note 依次为 正在后台下载更新包… → 下载完成，完整性校验通过。 → 已在系统安装器中打开… / 自动更新失败：…</td>
+        <td>⑤ 把 HTML 初值的两个标签与 JS 首帧的 note 文案画在同一屏</td>
+        <td>为了一屏看清"两个动作都在"；真机逐档文案以 <code>main.js</code> 的状态机为准，落地别照着稿子把标签钉死。</td>
+      </tr>
+      <tr>
+        <td>显隐按钮命中区</td>
+        <td><code>.field-action</code> 40×40、输入框右内距 48px</td>
+        <td>44×44、右内距 52px</td>
+        <td>规范第五条：触屏命中区 ≥44px（闸门会在 <code>min-height&lt;44</code> 时判红）。视觉上略变宽，值得。</td>
+      </tr>
+      <tr>
+        <td>焦点环 / spinner 轨道</td>
+        <td><code>--set-ring</code>（brand .22 alpha）外圈 4px；<code>--set-spinner-track</code>（brand .2）</td>
+        <td>焦点环已按派生层 <code>--set-ring</code> 与 base.css <code>.field__input:focus</code> 写成同一式（内圈 1px brand + 外圈 4px ring）；spinner 轨道用 <code>--set-line</code></td>
+        <td>真实代码另有 <code>--set-ring</code> / <code>--set-spinner-track</code> 两个自加键；本页不新增令牌，焦点用已声明的 <code>--set-ring</code>，spinner 轨道退回 <code>--set-line</code>（品牌感略弱于原稿的 brand .2）。<code>.is-focused</code> 只是把同一组声明显式画给评审看，落地仍走 <code>:focus</code>。</td>
+      </tr>
+      <tr>
+        <td>状态栏条带</td>
+        <td><code>res/values(-night)/colors.xml</code> 的 <code>@color/canvas</code> 由原生 decorView 绘制；<code>main.js</code> 按页面 <code>--set-bg</code> 推图标极性</td>
+        <td>框顶那条 22px 只是示意</td>
+        <td><strong>待验证：APK 未构建</strong>（本机 gradle dist 未缓存），真机条带色差、夜间改 <code>#FF0D0D0F</code>（A6）与图标极性（A7）在完成前不许写"已验证"。</td>
+      </tr>
+      <tr>
+        <td>键盘弹起高度</td>
+        <td><code>@media (max-height: 640px)</code> 真机条件：标题缩小、<code>.page-sub</code> 隐藏、卡片内距收紧</td>
+        <td>写死 390×400 可视区 + <code>.screen--vis</code> 类复刻同一组收紧规则（标题 22px、副标题隐藏、脚注收起；稿子里不能用媒体查询：它算的是浏览器窗口，不是设备框）</td>
+        <td><strong>待验证</strong>：真机可视高度取决于键盘高度与 <code>adjustResize</code>，400 是近似值；键盘本体不属于 WebView，稿里画它只为标注"压矮发生在哪"。</td>
+      </tr>
+      <tr>
+        <td>vw 单位</td>
+        <td><code>clamp(26px, 7.6vw, 34px)</code></td>
+        <td>设备框内写死 24px（密度这一版把大标题从 29px 降下来了，见上表「信息密度」行）</td>
+        <td>同上：导览页的 vw 是浏览器宽度。落地代码用固定 24px（不再是 clamp —— 大标题不随屏宽缩放，避免小屏被压到 20px 以下）。</td>
+      </tr>
+      <tr>
+        <td>未画的状态</td>
+        <td>还有 <code>请填写 Relay 地址</code>、<code>该 Relay 需要访问 token，请填写后再连接</code>、<code>访问 token 不正确，请检查后重试</code>、<code>Relay 响应异常（HTTP 502），请检查地址</code>、<code>请先填写 Relay 地址</code>、自检 <code>自检中…</code></td>
+        <td>只画了题目要求的错误文案与自检三态</td>
+        <td>同一个 <code>#error</code> / <code>#self-check-status</code> 槽位，排版不变；逐条文案以 <code>main.js</code> 为准，稿子没有新增任何状态。</td>
+      </tr>
+    </table>
+    <p class="note">闸门：<code>node design/tools/check.mjs</code>（结构 / 令牌同源 / 令牌优先 / 令牌存在性 / 动效白名单 / 命中区）。
+      本页所有颜色都来自 <code>var(--set-*)</code>，动效只碰 transform / opacity，触屏可点元素一律
+      <code>.btn--touch</code>（44px）。三段式主区用 <code>margin: auto 0</code> 而非
+      <code>justify-content: center</code>：键盘把视口压到 400px 时 center 会把顶部内容推出可滚动区，
+      auto 边距在空间不足时自己塌成 0。</p>
+  </div>
+
+  <p class="note"><a href="./index.html" style="color: var(--set-brand-ink)">← 返回总览</a></p>
+
+</div>
+</body>
+</html>

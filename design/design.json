@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "dsh_mobile · Apple 三端",
+  "style": "apple",
+  "theme": "light",
+  "entry": "index.html",
+  "tokens": "tokens.css",
+  "docs": [
+    "docs/设计规范.md",
+    "docs/落地清单.md"
+  ]
+}

@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-target="desktop">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · 设置页「远程访问」分区 · dsh_mobile Apple 三端</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./base.css">
+<style>
+/* =============================================================================
+ * 03 · DSH 设置页「远程访问」分区 —— 可交互原型
+ * -----------------------------------------------------------------------------
+ * 为什么重写：上一版是 7 个静态框并排（实测文档高 8850px、24% 面积是重复画的宿主
+ * 外壳、动画声明 0 个）。那等于把交互设计交付成截图墙 —— apple 语言最核心的
+ * 一档（状态切换时的过渡、选中态的跟随、按压即时反馈）在静态堆叠里根本观察不到。
+ * 现在：宿主外壳只画一次，7 个数据态由顶部的状态机切换，切换本身带动画。
+ *
+ * 密度基准来自宿主实测（不是估的）：
+ *   packages/client/ui-primitives/src/settings-form/fields.module.css
+ *     → 字段 padding 12px 0、gap 6–8px、图标按钮 24×24、控件 padding 5px 14px
+ *   SettingsForm.module.css → 标签 12px/1.5、正文 13px/1.5、分组 padding-top 16px
+ * 上一版把移动端 .row{min-height:44px} 直接套进桌面面板，行高虚高 12px，
+ * 这是"浪费空间"的真因。现在走 base.css 的 [data-target="desktop"] 档（32px 行）。
+ *
+ * 宿主外壳（导航列 + 标题栏）只做示意，不重设计宿主；分区内容才是交付物。
+ * 排版决策（对应 client.js 现状）：
+ *   1) 状态区从 Row 的裸 flex（lineHeight:1.7）改成 inset-grouped 行，列对齐靠行缝。
+ *   2) 端点层级用选中态边框表达，不叠第二层阴影（Apple 的层级靠 fill）。
+ *   3) 长值（probeUrl / unit 名 / stateFile）overflow-wrap:anywhere + 每级 min-width:0。
+ *   4) 状态永远"颜色 + 文字"一起给，点子只作冗余编码。
+ *   5) 动作行不叫 .bar：材质层选了 .toolbar/.bar/nav，用 .bar 会被刷上半透明材质，
+ *      而它坐在白卡里 = 浅色半透明叠浅色半透明（硬规矩 5）。改名 .actbar。
+ *   6) 不用 color-mix()：build.target=chrome100 不转译，WebView 上整条声明静默失效。
+ *      语义底色走派生令牌 --set-*-tint / --set-*-line / --set-*-ink。
+ *   7) 浅色 --set-ok 压白卡只有 4.14:1（不达 AA），所以绿色只上图形（点子/卡框，
+ *      ≥3:1 达标），文字走 --set-text + 600 字重 —— 语义由词承载，不由颜色承载。
+ * ========================================================================== */
+
+.page { max-width: 1180px; margin: 0 auto; padding: 24px 24px 56px; }
+.lede { margin: 10px 0 0; max-width: 76ch; font-size: 14px; line-height: 1.55; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- 控制条：状态机 + 主题 ---------- */
+.ctrl { display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: flex-end; margin: 18px 0 0; padding: 12px 14px; border-radius: var(--set-radius); background: var(--set-surface); box-shadow: var(--set-shadow); }
+.ctrl__group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ctrl__label { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--set-text-2); }
+.ctrl__note { flex: 1 1 260px; min-width: 0; margin: 0; font-size: 11px; line-height: 1.5; color: var(--set-text-2); overflow-wrap: anywhere; }
+
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--set-radius-sm); background: var(--set-surface-2); box-shadow: inset 0 0 0 1px var(--set-line); }
+.seg__b {
+  font: inherit; font-size: 12px; font-weight: 500; letter-spacing: -0.003em;
+  min-height: 28px; padding: 4px 10px; border: 0; border-radius: 6px;
+  color: var(--set-text-2); background: transparent; cursor: pointer;
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              opacity var(--set-dur-press) var(--set-ease-out),
+              background var(--set-dur-fast) var(--set-ease-out),
+              color var(--set-dur-fast) var(--set-ease-out);
+}
+.seg__b.is-on { color: var(--set-text); background: var(--set-surface); box-shadow: var(--set-shadow), inset 0 0 0 1px var(--set-line); }
+.seg__b:active, .seg__b.is-pressed { transform: scale(var(--set-press-scale)); }
+.seg__b:focus-visible { outline: 2px solid var(--set-brand); outline-offset: 1px; }
+
+/* ---------- 唯一的面板：宿主外壳只画一次 ---------- */
+.win {
+  display: grid; grid-template-columns: 208px minmax(0, 1fr);
+  margin: 14px 0 0; min-width: 0;
+  border: 1px solid var(--set-line); border-radius: var(--set-radius);
+  background: var(--set-bg); color: var(--set-text);
+  box-shadow: var(--set-shadow); overflow: hidden;
+}
+.side { padding: 12px 8px; min-width: 0; }
+.side__t { margin: 2px 8px 8px; font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--set-text-2); }
+.nav { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.nav__item { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 8px; border-radius: var(--set-radius-sm); font-size: 13px; color: var(--set-text); cursor: default; transition: transform var(--set-dur-press) var(--set-ease-out); }
+.nav__item:active { transform: scale(var(--set-press-scale)); }
+.nav__item--on { background: var(--set-surface); color: var(--set-brand-ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--set-line); }
+.nav__mk { flex: 0 0 auto; width: 14px; text-align: center; color: var(--set-text-2); font-size: 11px; }
+
+.pane { padding: 14px 16px 18px; min-width: 0; background: var(--set-surface); border-left: 1px solid var(--set-line); }
+.pane__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-width: 0; }
+.pane__title { margin: 0; font-family: var(--set-font-display); font-size: 15px; font-weight: 600; letter-spacing: -0.016em; }
+.pane__host { flex: 0 0 auto; font-size: 11px; letter-spacing: .01em; color: var(--set-text-2); }
+
+/* 状态切换的动效走共享层 .stagger（base.css）：只碰 transform/opacity，
+   逐条按 --set-stagger 落位。页内不再另造一套 keyframes —— 两套真值会漂。 */
+
+/* ---------- 状态行：状态值用胶囊（2026-11-08 控件规范 .wb-badge） ----------
+ * 骨架 = 用户给的 .wb-badge 控件：12px/500、--set-radius-sm 圆角、色点
+ * currentColor、ink 承载语义。染底/描边走派生令牌（base.css 同源）——
+ * 不用 color-mix()（chrome100 会整条静默失效）；染底 alpha 是 gen-tokens
+ * 按 4.5 对比反推的派生档，描边统一控件的 30%。
+ * 颜色只是冗余编码：所有胶囊都有文字，读屏与色觉障碍都不丢语义。 */
+.st { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.st__pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: var(--set-radius-sm);
+  font-size: 12px; line-height: 1.6; font-weight: 500; letter-spacing: .01em;
+  white-space: nowrap; min-width: 0;
+  color: var(--set-text-2); background: var(--set-surface-2);
+  border: 1px solid var(--set-line);
+}
+.st__pill i { width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: 0 0 auto; }
+.st__pill--ok { color: var(--set-ok-ink); background: var(--set-surface-2); border-color: var(--set-ok-line); }
+.st__pill--warn { color: var(--set-warn-ink); background: var(--set-warn-tint); border-color: var(--set-warn-line); }
+.st__pill--bad { color: var(--set-danger-ink); background: var(--set-danger-tint); border-color: var(--set-danger-line); }
+.st__t { font-weight: 600; }
+.st__name { min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- 扫码配对分区（0.1.19 新增，真实 client.js pairBlock 的稿面表达） ----------
+ * QR 由 host 侧 vendored qrcode-generator 生成 SVG（载荷只有 v/relay/ca/code，
+ * 不含任何长效凭据）；稿子里用一个占位 SVG 网格表达"这里有一张码"，不画真码。
+ * 倒计时是事实（expiresAt - now），过期后码图变暗 + 文案换「点刷新重新生成」。
+ * 撤销带两步确认（先点 × 出 ✓/×，再点 ✓ 才发请求）—— 与真实 pairConfirm 态一致。 */
+.pair { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pair__qrbox { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 4px; }
+.pair__qr { width: 164px; height: 164px; border-radius: var(--set-radius-sm); background: var(--set-surface); box-shadow: inset 0 0 0 1px var(--set-line); display: grid; place-items: center; }
+.pair__qr svg { display: block; }
+.pair__qr--expired { opacity: .45; }
+.pair__ttl { font-size: 12px; letter-spacing: .01em; color: var(--set-text-2); font-variant-numeric: tabular-nums; }
+.pair__acts { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
+.pair__acts-l { font-size: 13px; color: var(--set-text-2); }
+.pair__acts-r { display: inline-flex; gap: 6px; }
+.pair__dev { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; padding: 5px 0; min-width: 0; }
+.pair__dev + .pair__dev { box-shadow: inset 0 1px 0 var(--set-line); }
+.pair__dev-name { flex: 1 1 auto; min-width: 0; font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.pair__dev-seen { flex: 0 1 auto; min-width: 0; font-size: 11px; color: var(--set-text-2); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.pair__dev-acts { flex: 0 0 auto; display: inline-flex; gap: 4px; }
+
+/* ---------- 端点卡：选中态用边框，不叠第二层阴影 ---------- */
+.eps { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* 卡内左右内缩取 14px，与 [data-target="desktop"] .row 的 padding-inline 同值：
+ * inset-grouped 的立身之本是"所有行的文字在同一条竖线上"。上一版这里写 12px，
+ * 于是状态区 label 在 x=314、端点卡内容在 x=312.2 —— 同一面板两条左边缘。
+ * 卡内的 .ep__facts .row 把横向 padding 归零，所以卡片 padding 就是唯一决定值。 */
+.ep { position: relative; padding: 10px 14px; border-radius: var(--set-radius); background: var(--set-surface-2); box-shadow: inset 0 0 0 1px var(--set-line); min-width: 0; transition: transform var(--set-dur-press) var(--set-ease-out), box-shadow var(--set-dur-fast) var(--set-ease-out); }
+.ep:active { transform: scale(var(--set-press-scale)); }
+.ep--on { background: var(--set-surface); box-shadow: inset 0 0 0 2px var(--set-ok); }
+.ep__top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.ep__name { min-width: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.ep__url { margin: 2px 0 0; font-family: var(--set-font-mono); font-size: 11px; line-height: 1.45; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.ep__badge {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: var(--set-radius-sm);
+  font-size: 12px; line-height: 1.6; font-weight: 500; letter-spacing: .01em;
+  white-space: nowrap;
+  color: var(--set-ok-ink); background: var(--set-surface-2);
+  border: 1px solid var(--set-ok-line);
+}
+.ep__badge i { width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: 0 0 auto; }
+.ep__facts { margin: 8px 0 0; display: grid; gap: 1px; }
+.ep__facts .row { min-height: 26px; padding: 3px 0; font-size: 12px; }
+.ep__facts .row + .row { box-shadow: none; }
+
+/* ---------- 密度：同类项折叠成一行（iOS 的"同类一行"） ----------
+ * 状态区原来 6 行（入口/Relay/隧道/frpc/网关/结论），端点卡每张 4 行。
+ * 手机上 44px 行高 → 一屏只有 8 行，状态区就吃掉一屏。
+ * 现在：三个 unit 合并成一行摘要 + <details> 展开看明细；
+ * 端点卡的三个 unit 名合并成一行可点开的摘要。原文一字不改，只是不默认展开。 */
+.row--disclose { display: block; padding: 0; }
+/* summary 高度分档：触屏 44（闸门规则 8），桌面 32（同 .row 的宿主档）。
+   写成两处而不是一处 min-height —— 触屏档声明在下面统一覆盖。 */
+.row--disclose > summary {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 32px; padding: 5px 14px; cursor: pointer; list-style: none;
+  font-size: 13px; color: var(--set-text-2);
+}
+.row--disclose > summary::-webkit-details-marker { display: none; }
+.row--disclose > summary::after {
+  content: '›'; margin-left: auto; flex: 0 0 auto;
+  font-size: 15px; color: var(--set-text-2);
+  transform: rotate(90deg);
+  transition: transform var(--set-dur-fast) var(--set-ease-out);
+}
+.row--disclose[open] > summary::after { transform: rotate(-90deg); }
+.row--disclose > summary:active { opacity: .6; }
+.row__detail { padding: 0 14px 6px; }
+.row__detail .row { min-height: 26px; padding: 3px 0; font-size: 12px; }
+.row__detail .row + .row { box-shadow: none; }
+.ep__disclose { margin-top: 6px; }
+.ep__disclose-s {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 30px; font-size: 11px; line-height: 1.4;
+  color: var(--set-text-2); cursor: pointer; list-style: none;
+  overflow-wrap: anywhere;
+}
+.ep__disclose-s::-webkit-details-marker { display: none; }
+.ep__disclose-s::after { content: '›'; margin-left: auto; flex: 0 0 auto; font-size: 14px; }
+.ep__disclose[open] .ep__disclose-s::after { transform: rotate(90deg); }
+.ep__disclose[open] .ep__facts { margin-top: 4px; }
+
+/* 图形化动作按钮（与实装 .rar-iconbtn 同式）：视觉 32、命中区 44（::before），
+   图标 16、品牌色；busy 图标旋转（只碰 transform）。用户要求：动作一律图形，不用文字按钮。 */
+.iconbtn {
+  flex: 0 0 auto; position: relative;
+  display: inline-grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; margin: 0;
+  color: var(--set-brand-ink); background: transparent; border: 0;
+  border-radius: var(--set-radius-sm); cursor: pointer; touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out), opacity var(--set-dur-press) var(--set-ease-out);
+}
+.iconbtn::before { content: ""; position: absolute; inset: -6px; }
+.iconbtn svg { display: block; }
+.iconbtn:active, .iconbtn.is-pressed { transform: scale(var(--set-press-scale)); }
+.iconbtn[disabled] { opacity: .45; cursor: default; transform: none; }
+.iconbtn:focus-visible { outline: 2px solid var(--set-brand); outline-offset: 1px; }
+.iconbtn--busy svg { animation: spin .9s linear infinite; }
+[data-target="touch"] .iconbtn { width: 44px; height: 44px; }
+/* 分区标题行：标题左、刷新按钮右（2026-11-08 用户定）。
+   与 .sec-h 同样的上边距，内部标题清零，按钮用 margin-left:auto 贴右。 */
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 6px; min-width: 0; }
+.sec-head:first-child { margin-top: 0; }
+.sec-head .sec-h { margin: 0; }
+/* 视觉右缘对齐下方卡片：不挪按钮盒（会溢出），只把图标在按钮内右贴。 */
+.sec-head .iconbtn { justify-items: end; }
+[data-target="touch"] .sec-head { margin: 16px 0 6px; }
+[data-target="touch"] .sec-head .iconbtn { justify-items: end; }
+.hint { margin: 0; font-size: 11px; line-height: 1.5; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.fate { display: inline-flex; align-items: center; gap: 5px; margin: 0 0 6px; padding: 3px 8px; border-radius: var(--set-radius-sm); font: 600 11px/1.35 var(--set-font-mono); letter-spacing: .02em; color: var(--set-text-2); background: var(--set-surface-2); box-shadow: inset 0 0 0 1px var(--set-line); }
+
+/* ---------- 实测数据表 ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 0; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin: 10px 0 0; }
+.tbl { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+.tbl th, .tbl td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--set-line); min-width: 0; vertical-align: top; overflow-wrap: anywhere; }
+.tbl th { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); font-weight: 600; }
+.tbl td code { font-family: var(--set-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.tbl td.need { color: var(--set-warn-ink); }
+.tbl td.gone { color: var(--set-danger-ink); }
+.sec { margin: 16px 0 5px; font: 600 13px/1.35 var(--set-font-display); letter-spacing: .01em; color: var(--set-text); }
+.sec:first-child { margin-top: 0; }
+.notes { max-width: 1100px; margin: 34px 0 0; }
+
+/* ---------- 移动档（≤767px；<html data-target="touch"> 声明触屏目标） ----------
+ * 390px 实测：桌面档在手机上是坏的 —— 208px 侧栏把正文压到 132px 宽、行高被
+ * 换行撑到 86px、分段按钮竖摞成 96px 高、文档高 12639px。宿主自己有移动档
+ * （SettingsRoot.module.css 的两个 767px 块）：面板满屏、导航变横向滚动条、
+ * 加大触点、安全区留白。这里照宿主的做法给分区稿配移动档，判据逐条见
+ * 「移动档目标效果基准」（M1–M9）。
+ *
+ * 注意 data-target="touch" 同时会让闸门的 44px 命中区规则生效 —— 这正是
+ * 触屏档该有的约束，不是巧合。 */
+[data-target="touch"] .page { padding: 16px 14px 40px; }
+/* M4：分段控件单行横滚（同宿主导航条做法），不竖摞。
+ * 390px 首测 flex-wrap 成了三排、第 7 钮独占 330px —— 触屏控件该跟宿主
+ * 导航条同一答案：一行排开、可横滚、隐藏滚动条、每钮 44px。 */
+[data-target="touch"] .seg {
+  display: flex; flex-wrap: nowrap;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  padding-bottom: 2px;
+}
+[data-target="touch"] .seg::-webkit-scrollbar { display: none; }
+[data-target="touch"] .seg__b { flex: 1 0 auto; min-width: 88px; min-height: 44px; padding: 10px 12px; font-size: 15px; white-space: nowrap; }
+/* 横滚条能生效的前提是父级允许收缩：flex 子项默认 min-width:auto，
+ * .ctrl__group 没有这条时会被 .seg 的内容撑到 706px（390px 首测），
+ * 整页跟着溢出 345px —— 与 .nav 是同一类错误，一起写在这里。 */
+[data-target="touch"] .ctrl { flex-direction: column; align-items: stretch; gap: 12px; }
+[data-target="touch"] .ctrl__group { min-width: 0; max-width: 100%; }
+[data-target="touch"] .seg { max-width: 100%; }
+[data-target="touch"] .ctrl__note {
+  flex-basis: auto;
+  /* 手机上这是评审说明，不是操作对象：限高两行 + 展开开关，别让它把面板推到三屏之外 */
+  max-height: 3.2em; overflow: hidden; cursor: pointer;
+  transition: max-height var(--set-dur-fast) var(--set-ease-out);
+}
+[data-target="touch"] .ctrl__note.is-open { max-height: 60em; }
+[data-target="touch"] .win { grid-template-columns: minmax(0, 1fr); }
+/* M2：侧栏变横向滚动条（同宿主 767px 块：edge-to-edge、自管 padding、隐藏滚动条） */
+[data-target="touch"] .side {
+  border-right: 0;
+  border-bottom: 1px solid var(--set-material-edge);
+  padding: 10px 0 8px;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+[data-target="touch"] .side::-webkit-scrollbar { display: none; }
+[data-target="touch"] .side__t { display: none; }        /* 竖列的分组标题在横条里没有位置 */
+/* 横滚必须写在 .nav 自己身上：.side 是 display:block，只负责兜底。
+ * 上一版漏了这条，.nav 的 549px 内容溢出到 .side 之外，把整页撑宽 345px ——
+ * .win 的 overflow:hidden 又把它裁掉，于是"看得见溢出、滚不到内容"。 */
+[data-target="touch"] .nav {
+  flex-direction: row; gap: 4px; padding: 0 12px; min-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+[data-target="touch"] .nav::-webkit-scrollbar { display: none; }
+[data-target="touch"] .nav__item { flex: 1 0 auto; justify-content: center; min-width: 96px; min-height: 44px; padding: 8px 14px; font-size: 15px; }
+/* M3：触屏行高与字号 */
+[data-target="touch"] .pane { padding: 12px 14px 20px; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+[data-target="touch"] .row { min-height: 44px; font-size: 15px; padding: 8px 14px; }
+[data-target="touch"] .row--disclose > summary { min-height: 44px; padding: 8px 14px; font-size: 15px; }
+[data-target="touch"] .row__detail .row { min-height: 40px; font-size: 13px; }
+[data-target="touch"] .ep { padding: 12px 14px; }
+[data-target="touch"] .ep__facts .row { min-height: 40px; font-size: 13px; }
+[data-target="touch"] .ep__facts .row + .row { box-shadow: inset 0 1px 0 var(--set-line); }  /* facts 行没有行缝，触屏加回来 */
+[data-target="touch"] .btn { min-height: 45px; font-size: 15px; padding: 10px 16px; }
+/* M5：端点卡顶行允许换行（name 换行时按钮掉到下一行且保持 44px 高），不挤压 */
+[data-target="touch"] .ep__top { flex-wrap: wrap; }
+[data-target="touch"] .banner { font-size: 14px; }
+[data-target="touch"] .sec-h { font-size: 13px; }
+[data-target="touch"] .st__t { font-size: 15px; }
+[data-target="touch"] .st__pill, [data-target="touch"] .ep__badge { font-size: 12px; padding: 3px 10px; }
+[data-target="touch"] .mono { font-size: 13px; }
+/* M7：评审材料在触屏档折叠。details 默认折叠，display:none 的内容不参与布局；
+ * 桌面档下面 details 退化为透明容器（summary 隐藏），文档流与上一版一致。 */
+.review__body { min-width: 0; }
+[data-target="touch"] .review { margin-top: 16px; border-radius: var(--set-radius); background: var(--set-surface); box-shadow: var(--set-shadow); }
+[data-target="touch"] .review > .sec {
+  margin: 0; padding: 0 14px; min-height: 44px;
+  display: flex; align-items: center;
+  cursor: pointer; list-style: none; touch-action: manipulation;
+  transition: opacity var(--set-dur-press) var(--set-ease-out);
+}
+[data-target="touch"] .review > .sec::-webkit-details-marker { display: none; }
+[data-target="touch"] .review > .sec::after {
+  content: '›'; margin-left: auto; flex: 0 0 auto;
+  font-size: 18px; color: var(--set-text-2);
+  transform: rotate(90deg);
+  transition: transform var(--set-dur-fast) var(--set-ease-out);
+}
+[data-target="touch"] .review[open] > .sec::after { transform: rotate(-90deg); }
+[data-target="touch"] .review > .sec:active { opacity: .6; }
+[data-target="touch"] .review__body { padding: 4px 14px 16px; }
+[data-target="touch"] .review .tbl { font-size: 13px; }
+[data-target="touch"] .review .tbl th, [data-target="touch"] .review .tbl td { padding: 7px 8px; }
+/* 桌面档：details 透明，summary 不显示（评审材料保持在文档流里可读） */
+.review > .sec { list-style: none; }
+.review > .sec::-webkit-details-marker { display: none; }
+html:not([data-target="touch"]) .review > summary.sec { display: none; }
+html:not([data-target="touch"]) .review { display: contents; }
+/* M7 由上面所有收紧共同达成，验收时量；M8 安全区在 .pane 底部（上面已写）。 */
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1 class="t-large-title">03 · 设置页「远程访问」分区</h1>
+  <p class="lede">插件经 <code>settings.section</code> 注入宿主的分区容器（<code>id: remote-access</code>、<code>order: 30</code>）。左侧导航列与标题栏只是示意 —— 本页不重设计宿主。分区内容可交互：切数据状态、选入口、跑一次刷新，都在同一个面板里发生。</p>
+
+  <div class="ctrl">
+    <div class="ctrl__group">
+      <span class="ctrl__label">数据状态（对应 client.js 的分支）</span>
+      <div class="seg" id="fates" role="group" aria-label="数据状态">
+        <button class="seg__b is-on" data-fate="F1" type="button">F1 正常</button>
+        <button class="seg__b" data-fate="F2" type="button">F2 未检查</button>
+        <button class="seg__b" data-fate="F3" type="button">F3 设备离线</button>
+        <button class="seg__b" data-fate="F4" type="button">F4 不可达</button>
+        <button class="seg__b" data-fate="F5" type="button">F5 端点为空</button>
+        <button class="seg__b" data-fate="F6" type="button">F6 unknown</button>
+        <button class="seg__b" data-fate="F7" type="button">F7 切换中</button>
+      </div>
+    </div>
+    <div class="ctrl__group">
+      <span class="ctrl__label">主题</span>
+      <div class="seg" id="themes" role="group" aria-label="主题">
+        <button class="seg__b is-on" data-theme-set="light" type="button">浅色</button>
+        <button class="seg__b" data-theme-set="dark" type="button">深色 apple-night</button>
+      </div>
+    </div>
+    <div class="ctrl__group">
+      <span class="ctrl__label">设备（密度档 + 命中区档）</span>
+      <div class="seg" id="targets" role="group" aria-label="设备档">
+        <button class="seg__b is-on" data-target-set="desktop" type="button">桌面 1280</button>
+        <button class="seg__b" data-target-set="touch" type="button">手机 390</button>
+      </div>
+    </div>
+    <div class="ctrl__group">
+      <span class="ctrl__label">扫码配对态（0.1.19）</span>
+      <div class="seg" id="pairs" role="group" aria-label="扫码配对态">
+        <button class="seg__b is-on" data-pair-set="P1" type="button">P1 码活着</button>
+        <button class="seg__b" data-pair-set="P2" type="button">P2 未生成</button>
+        <button class="seg__b" data-pair-set="P3" type="button">P3 已过期</button>
+        <button class="seg__b" data-pair-set="P4" type="button">P4 未启用</button>
+      </div>
+    </div>
+    <p class="ctrl__note">上一版把这 7 个态画成 7 个并排静态框（实测文档高 8850px，其中 24% 面积是重复的宿主外壳，动画声明 0 个）。现在外壳只有一份，7 个态共用同一个面板（桌面档最高 1080px），并由切换驱动入场动画 —— 观察「切换时怎么变」本来就是这一页要交付的东西。<strong>手机档</strong>（≤767px 同宿主断点）：390px 下实测桌面档是坏的（侧栏把正文压到 132px、分段钮竖摞 96px 高、文档高 12639px），移动档照宿主做法把导航变横条、行回归触屏 44px、底部留安全区 —— 切到「手机 390」档即所见即所得。</p>
+  </div>
+
+  <div class="legend">
+    <span class="fate" id="fateTitle">F1 · 正常态</span>
+    <span class="hint" id="fateNote" style="flex:1 1 40ch"></span>
+  </div>
+
+  <!-- ═══════════════ 唯一面板：宿主外壳画一次 ═══════════════ -->
+  <section class="win" id="panel" aria-label="远程访问分区">
+    <nav class="side chrome chrome--side">
+      <p class="side__t">设置</p>
+      <div class="nav">
+        <span class="nav__item"><span class="nav__mk">○</span>通用设置</span>
+        <span class="nav__item"><span class="nav__mk">○</span>模型</span>
+        <span class="nav__item"><span class="nav__mk">＋</span>插件</span>
+        <span class="nav__item nav__item--on" aria-current="true"><span class="nav__mk">◈</span>远程访问</span>
+        <span class="nav__item"><span class="nav__mk">○</span>归格会话</span>
+      </div>
+    </nav>
+
+    <div class="pane">
+      <header class="pane__head">
+        <h2 class="pane__title">远程访问</h2>
+        <span class="pane__host">宿主标题栏 · 不重设计</span>
+      </header>
+      <div id="body"></div>
+    </div>
+  </section>
+
+  <!-- 触屏档：面板之后全部是评审材料，收进默认折叠的 <details>（见样式区说明） -->
+  <details class="review" id="review">
+    <summary class="sec">评审材料：dock 徽章 · 交互契约 · 密度实测 · 落地要点（触屏档默认折叠）</summary>
+    <div class="review__body">
+
+    <!-- ═══════════════ dock 徽章：已按用户决定移除（2026-11-05）═══════════════ -->
+  <div class="sec" style="margin-top:22px">底部 dock 徽章 —— <strong>已移除，不再落地</strong></div>
+  <p class="hint" style="max-width:90ch">2026-11-05 用户定：手机上 composer 底部的「点此检查」是常驻噪音（还换行成两行），而它能给的信息设置页都有。真实插件已删 <code>DockPanel</code>、<code>conversation.composer.dock</code> 注入与 <code>dock.*</code> locale 键（zh/en 各 33 键相等校验通过，live bundle 已确认无此按钮）。下面的交互契约与落地要点里所有 dock 相关条目（C4、C5 的 dock.warn 键）一并作废，只留本记录。状态的唯一入口 = 设置页「远程访问」分区。</p>
+
+  <!-- ═══════════════ 交互契约：本页演示了什么 ═══════════════ -->
+  <div class="sec" style="margin-top:22px">交互契约（都能在上面的面板里试）</div>
+  <div class="kv">
+    <div class="card">
+      <div class="card__title">按压反馈在 pointerdown</div>
+      <p class="card__sub">分段控件、端点卡、刷新按钮都在 <code>pointerdown</code> 立刻缩到 <code>--set-press-scale</code>（.97 / 120ms），不等抬起。apple-design 第一条就是杀延迟；<code>:active</code> 在 WebView 上首触可能不触发、滚动后可能钉住，所以另挂 <code>.is-pressed</code> 类做兜底 —— 只加类，不 preventDefault，不抢手势。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">状态切换可打断、从当前值继续</div>
+      <p class="card__sub">切换数据态时新内容走共享层的 <code>.stagger</code>（<code>enter-card</code>，只碰 opacity + transform，400ms 弹簧近似）按 <code>--set-stagger</code> 50ms 逐条落位；动画期间不锁输入，连点会直接换目标，不等上一段放完。只碰 transform/opacity，不动画高度 —— 高度动画会让整页抖动，也违反白名单。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">选中态用边框，不叠第二层阴影</div>
+      <p class="card__sub">端点卡的选中态是 <code>inset 0 0 0 2px var(--set-ok)</code>。Apple 的层级靠 fill 分层：分组表面已经有一层 <code>--set-shadow</code>，卡上再叠一层就是"两层浮起"。绿只上图形（4.14:1 满足非文本 ≥3:1），文字仍是 <code>--set-text</code> + 600 字重 —— 语义由词承载。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">刷新保留上下文</div>
+      <p class="card__sub">点「刷新状态」：按钮进 busy（<code>opacity .45</code> + 文案变「正在检查…」）但 <strong>label 不被替换成一个孤零零的「…」</strong> —— 原代码 <code>DockPanel</code> 就这么丢上下文；该徽章本身已按用户决定整个移除（见上方记录），这条经验保留给设置页内的刷新按钮。</p>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 密度实测 ═══════════════ -->
+  <div class="sec" style="margin-top:22px">密度实测（行高 44→32 之外，这一版还合并了同类项）</div>
+  <table class="tbl">
+    <tr><th>项</th><th>上一版（移动端档）</th><th>本页（宿主档）</th><th>宿主出处</th></tr>
+    <tr><td>状态行高</td><td><code>min-height: 44px</code></td><td><code>min-height: 32px</code></td><td><code>fields.module.css</code> 字段 <code>padding: 12px 0</code> + 13px 正文</td></tr>
+    <tr><td><strong>同类项合并</strong></td><td>三个 unit 各占一行（隧道 / frpc / frpc 网关）</td><td><strong>一行摘要</strong>（<code>active · active · active</code>）+ <code>&lt;details&gt;</code> 展开看明细；状态区 6 行 → 3 行</td><td>iOS 设置页的"同类一行"：VPN/飞行模式等同类开关合并成一行</td></tr>
+    <tr><td><strong>端点卡</strong></td><td>每张卡 4 行（名称/URL/3 个 unit）</td><td>unit 名合并成一行可点开的摘要（<code>.ep__disclose</code>），默认收起</td><td>同上；<strong>原文一字不改</strong>，只是不默认展开</td></tr>
+    <tr><td>图标按钮</td><td>40×40</td><td>24×24</td><td><code>fields.module.css</code> <code>.helpButton { width/height: 24px }</code></td></tr>
+    <tr><td>控件内距</td><td><code>14px 18px</code></td><td><code>5px 14px</code></td><td><code>SettingsForm.module.css</code> <code>padding: 5px 14px</code></td></tr>
+    <tr><td>标签字号</td><td>13px</td><td>12px / 1.5</td><td><code>SettingsForm.module.css</code> <code>font-size: 12px; line-height: 1.5</code></td></tr>
+    <tr><td>7 态总高</td><td>8850px（7 个框并排，实测）</td><td>5015px 文档 / 面板最高 1080px（1280×1000 实测，仍需少量滚动）</td><td>—</td></tr>
+  </table>
+  <p class="hint" style="margin-top:8px"><strong>合并不是隐藏</strong>：三个 unit 的状态与名字都在，只是默认收在 <code>&lt;details&gt;</code> 里。理由是"一行能读完的摘要 + 需要时展开"，而不是"少画几行让人以为只有一项"。展开用原生 <code>&lt;details&gt;</code>：无 JS、键盘可达、默认收起 —— 这也是苹果在设置页里的做法。</p>
+  <p class="hint" style="margin-top:8px;max-width:100ch">44px 是触屏下限，用在桌面设置面板上就是把每个分区撑高一倍。桌面档命中区 28px 足够（宿主自己就是 24–28px）；触屏那套仍保留在 <code>base.css</code> 的默认档与 <code>.btn--touch</code> 里，App 连接页不受影响。</p>
+
+  <!-- ═══════════════ 状态机：7 个数据态由同一份渲染函数产出 ═══════════════ -->
+  <script>
+  /* 数据形状对齐 client.js 的 /api/remote-access/status 与 /config 返回。
+     这里只写"事实"，渲染层不兜底：
+       · status === null          → 一个字段都不编（F2）
+       · state === 'unknown'      → 不给语义色、不给绿，含义由原文承载（F6）
+       · reachable && !online     → warn（链路断 ≠ 请求失败）（F3）
+       · error / HTTP xxx         → 原文照抄，不翻译不美化（F4）
+     颜色一律走类名 + tokens.css，脚本里不出现任何色值字面量（闸门会拦）。 */
+
+  const EPS = [
+    { id: 'jp-domain', label: 'JP 域名入口', probeUrl: 'https://dsh.relay.example.com',
+      tunnelUnit: 'dsh-tunnel.service', frpcUnit: 'frpc.service', frpcGatewayUnit: 'frpc-gateway-8326.service', active: true },
+    { id: 'ip-direct', label: 'JP IP 直连', probeUrl: 'http://154.36.189.149:8326',
+      tunnelUnit: 'dsh-tunnel-ip.service', frpcUnit: 'frpc.service', frpcGatewayUnit: 'frpc-gateway-8326.service', active: false },
+    { id: 'lan', label: '局域网（备用）', probeUrl: 'http://192.0.2.71:3082',
+      tunnelUnit: 'dsh-tunnel-lan.service', frpcUnit: '（不经 frpc）', frpcGatewayUnit: '（不经网关）', active: false },
+  ];
+
+  const ok = (state) => ({ state, unit: state === 'active' || state === 'running' ? 1 : 0 });
+
+  const FATES = {
+    F1: {
+      title: 'F1 · 正常态',
+      note: 'status 回来了，端点也回来了。这一态是验收基准：每个字段都有事实来源。',
+      status: {
+        endpointLabel: 'JP 域名入口',
+        node: { label: 'Cubie A7Z', deviceId: 'a7z-9ec8', online: true },
+        snapshot: {
+          relay: { reachable: true, deviceOnline: true, probeUrl: 'https://dsh.relay.example.com/__dsh_tunnel__/probe' },
+          units: { tunnel: ok('active'), frpc: ok('active'), frpcGateway: ok('active') },
+        },
+        verdict: 'ok: relay reachable and device linked, tunnel service active',
+      },
+      cfg: { endpoints: EPS, stateFile: '~/.dsh/remote-access/state.json', allowRestart: true, logTailLines: 40 },
+      error: null, busy: false,
+    },
+    F2: {
+      title: 'F2 · 未检查（status === null）',
+      note: '首帧就是这个态：两个请求还没回。渲染层一个值都不编 —— 兜底成「—」或「正常」会让人以为已经查过。',
+      status: null, cfg: null, error: null, busy: false,
+    },
+    F3: {
+      title: 'F3 · 设备离线（reachable 但 deviceOnline=false）',
+      note: 'relay 自己回了 200，是本机到 relay 的链路没挂上。语义是「链路断」不是「请求失败」→ warn 档，不是 danger。现状代码 relayOk ? good : bad 会把它画成失败。',
+      status: {
+        endpointLabel: 'JP IP 直连',
+        node: { label: 'Cubie A7Z', deviceId: 'a7z-9ec8', online: false },
+        snapshot: {
+          relay: { reachable: true, deviceOnline: false, probeUrl: 'http://154.36.189.149:8326/__dsh_tunnel__/probe' },
+          units: { tunnel: ok('inactive'), frpc: ok('active'), frpcGateway: ok('active') },
+        },
+        verdict: 'degraded: relay reachable but no device linked (tunnel down?)',
+      },
+      cfg: { endpoints: EPS.map((e, i) => ({ ...e, active: i === 1 })), stateFile: '~/.dsh/remote-access/state.json', allowRestart: true, logTailLines: 40 },
+      error: null, busy: false,
+    },
+    F4: {
+      title: 'F4 · 不可达 / 请求失败',
+      note: 'HTTP 码与 fetch 异常原文照抄（body.error / `HTTP ${res.status}`），不翻译、不美化 —— 这是给人核对的机器事实。',
+      status: null,
+      error: 'HTTP 502',
+      cfg: { endpoints: EPS, stateFile: '~/.dsh/remote-access/state.json', allowRestart: true, logTailLines: 40 },
+      busy: false,
+    },
+    F5: {
+      title: 'F5 · 端点为空（endpoints = []）',
+      note: '配置读到了但列表是空的。语义是「还没配」不是「配错了」→ 中性空状态 + 点名该改哪个文件，danger 只留给请求失败。',
+      status: null, error: null, busy: false,
+      cfg: { endpoints: [], stateFile: '~/.dsh/remote-access/state.json', allowRestart: false, logTailLines: 20 },
+    },
+    F6: {
+      title: 'F6 · unit state = unknown（读不到，不是停了）',
+      note: 'unknown 的三种成因：systemctl 不可用 / 超时 8000ms / 用户总线没起（沙箱里常见）。中间列顺带演示 Windows 档：真实代码认 running，并把 start_pending / stop_pending 判成 bad —— 稿子建议过渡态用 warn（进 C6）。',
+      status: {
+        endpointLabel: '局域网（备用）',
+        node: { label: 'Cubie A7Z', deviceId: 'a7z-9ec8', online: true },
+        snapshot: {
+          relay: { reachable: true, deviceOnline: true, probeUrl: 'http://192.0.2.71:3082/__dsh_tunnel__/probe' },
+          units: { tunnel: { state: 'unknown' }, frpc: { state: 'start_pending' }, frpcGateway: { state: 'active' } },
+        },
+        verdict: 'degraded: unit state unknown (systemctl unavailable?)',
+      },
+      cfg: { endpoints: EPS.map((e, i) => ({ ...e, active: i === 2 })), stateFile: '~/.dsh/remote-access/state.json', allowRestart: true, logTailLines: 40 },
+      error: null, busy: false,
+    },
+    F7: {
+      title: 'F7 · 切换 / 刷新中（busy）',
+      note: '切换端点或点刷新的那一下：按钮置 disabled 视觉并保留 label，不把整条文案换成一个「…」—— 现状 DockPanel 会丢上下文，读屏在这一下读不到「远程访问」。',
+      status: {
+        endpointLabel: 'JP 域名入口',
+        node: { label: 'Cubie A7Z', deviceId: 'a7z-9ec8', online: true },
+        snapshot: {
+          relay: { reachable: true, deviceOnline: true, probeUrl: 'https://dsh.relay.example.com/__dsh_tunnel__/probe' },
+          units: { tunnel: ok('active'), frpc: ok('active'), frpcGateway: ok('active') },
+        },
+        verdict: 'ok: relay reachable and device linked, tunnel service active',
+      },
+      cfg: { endpoints: EPS, stateFile: '~/.dsh/remote-access/state.json', allowRestart: true, logTailLines: 40 },
+      error: null, busy: true,
+    },
+  };
+
+  /* 图形化动作按钮的图标（24 viewBox / stroke=currentColor） */
+  const ICONS = {
+    swap: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  };
+  const icon = (name, size = 16) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`;
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  /* 状态胶囊：颜色只作冗余编码，含义永远由词承载。
+     unknown 不给语义色 —— 它既不是成功也不是失败（中性胶囊）。 */
+  const toneOf = (u) => {
+    if (!u) return 'neutral';
+    if (u.state === 'unknown') return 'neutral';
+    if (u.state === 'active' || u.state === 'running') return 'ok';
+    if (u.state === 'start_pending' || u.state === 'stop_pending') return 'warn';
+    return 'bad';
+  };
+  const TONE_CLASS = { ok: 'st__pill--ok', warn: 'st__pill--warn', bad: 'st__pill--bad', neutral: '' };
+  const statusPill = (text, tone) =>
+    `<span class="st__pill ${TONE_CLASS[tone] || ''}"><i></i><span class="st__t">${esc(text)}</span></span>`;
+  const st = (label, state, tone, extra) => {
+    const value = tone && tone !== 'none' ? statusPill(state, tone) : `<span class="st__t">${esc(state)}</span>`;
+    return `<div class="row${extra ? ' ' + extra : ''}">
+      <span class="row__label">${esc(label)}</span>
+      <span class="row__value"><span class="st">${value}</span></span>
+    </div>`;
+  };
+
+  const renderStatus = (f) => {
+    if (f.error) {
+      return `<p class="banner banner--bad"><span class="dot dot--bad"></span>状态请求失败：<code>${esc(f.error)}</code> —— 原文照 <code>client.js</code> 的 <code>body.error || \`HTTP \${res.status}\`</code>，翻成中文会让人按错的方向排查。</p>`;
+    }
+    if (!f.status) {
+      /* 两种 null 不是同一件事，文案不能共用一句：
+         配置也没回 = 两个请求都还没回（F2）；
+         配置已读到 = 只有状态没查，此时说「两个请求都还没回」就是在编事实（F5）。 */
+      const why = f.cfg
+        ? `尚未检查 —— 配置已经读到（${f.cfg.endpoints.length} 个端点），只有状态请求还没回。`
+        : '尚未检查 —— 两个请求都还没回。';
+      return `<p class="banner banner--warn"><span class="dot"></span>${why}这一态不兜底任何字段：把 unknown 画成「正常」，或把缺失画成「—」，都等于伪造事实。</p>`;
+    }
+    const s = f.status, r = s.snapshot.relay, u = s.snapshot.units;
+    const node = s.node;
+    const relayTone = r.reachable ? (r.deviceOnline === true ? 'ok' : 'warn') : 'bad';
+    const relayText = r.reachable ? (r.deviceOnline === true ? '设备在线' : '设备离线（链路断）') : '不可达';
+    const nodeTone = node ? (node.online === true ? 'ok' : node.online === false ? 'bad' : 'neutral') : 'neutral';
+    const nodeText = node ? (node.online === true ? '在线' : node.online === false ? '离线' : '未知') : '';
+    const nodeRow = node
+      ? `<div class="row"><span class="row__label">当前节点</span><span class="row__value"><span class="st"><span class="st__name">${esc(node.label)} (${esc(node.deviceId)})</span>${statusPill(nodeText, nodeTone)}</span></span></div>`
+      : st('当前节点', '未配置节点', 'none');
+    /* 三个 systemd unit 合并成一行胶囊摘要：iOS 的做法是"同类项一行"，
+       逐条展开只在需要核对时才做。6 行 → 3 行，一屏多出一倍的行。
+       展开用 <details>（原生、无 JS、键盘可达），unit 名原文保留在展开层。
+       先在模板外算好字符串 —— 模板里再嵌反引号模板虽然合法，但多一层引号就
+       多一处引号错位的可能，且这段没法用 node --check 单独验。 */
+    const unitPills = [u.tunnel, u.frpc, u.frpcGateway].map((x) => statusPill(x.state, toneOf(x))).join('');
+    const allSame = u.tunnel.state === u.frpc.state && u.frpc.state === u.frpcGateway.state;
+    const unitMismatch = allSame ? '' : statusPill('状态不一致', 'warn');
+    return `<div class="group group--inset">
+      ${st('当前入口', s.endpointLabel || s.endpointId, 'none')}
+      ${nodeRow}
+      ${st('Relay', relayText, relayTone)}
+      <div class="row"><span class="row__label">服务单元</span><span class="row__value"><span class="st">${unitPills}${unitMismatch}</span></span></div>
+      <details class="row row--disclose">
+        <summary class="row__label">单元明细（3 个）</summary>
+        <div class="row__detail">
+          ${st(u.tunnel.state === 'unknown' ? '隧道单元' : '隧道', u.tunnel.state, toneOf(u.tunnel))}
+          ${st('frpc', u.frpc.state, toneOf(u.frpc))}
+          ${st('frpc 网关', u.frpcGateway.state, toneOf(u.frpcGateway))}
+        </div>
+      </details>
+      <div class="row"><span class="row__label">结论</span><span class="row__value mono">${esc(s.verdict)}</span></div>
+    </div>
+    <p class="hint" style="margin-top:8px">「结论」保留 <code>verdict()</code> 的英文原文：它是给人核对的机器事实，翻成「一切正常」就把可对核的信息删掉了。服务行显示 systemd unit 名原文（<code>svc.label || svc.name</code>），不意译成「隧道/frpc/网关」这种丢掉 <code>.service</code> 后缀的说法 —— 展开层里是原文。</p>`;
+  };
+
+  const renderEndpoints = (f) => {
+    if (!f.cfg) return `<p class="hint">正在加载配置…（<code>GET /api/remote-access/config</code>，<code>cache: no-store</code>）</p>`;
+    const list = f.cfg.endpoints;
+    if (!list.length) {
+      return `<div class="empty"><p class="empty__title">未配置任何端点（0 个）</p><p class="empty__detail">在 <code>cordis.patch.yml</code> 的 <code>endpoints</code> 下添加；当前选择持久化于 <code>${esc(f.cfg.stateFile)}</code></p></div>
+        <p class="hint">空列表用中性空状态而不是红字：语义是「还没配」，不是「配错了」。danger 只留给 F4 那种请求失败。</p>`;
+    }
+    return `<div class="eps">` + list.map((e) => `
+      <div class="ep${e.active ? ' ep--on' : ''}">
+        <div class="ep__top">
+          <span class="ep__name">${esc(e.label)}</span>
+          ${e.active
+            ? `<span class="ep__badge"><i></i>使用中</span>`
+            : `<button class="iconbtn${f.busy ? ' iconbtn--busy' : ''}" type="button" data-switch="${esc(e.id)}"${f.busy ? ' disabled' : ''} aria-label="${f.busy ? '切换中…' : '切换到此入口'}" title="${f.busy ? '切换中…' : '切换到此入口'}">${icon('swap')}</button>`}
+        </div>
+        <p class="ep__url">${esc(e.probeUrl)}</p>
+        <details class="ep__disclose">
+          <summary class="ep__disclose-s">单元：${esc(e.tunnelUnit)} · ${esc(e.frpcUnit)} · ${esc(e.frpcGatewayUnit)}</summary>
+          <div class="ep__facts">
+            ${st('隧道单元', e.tunnelUnit, 'none')}
+            ${st('frpc 单元', e.frpcUnit, 'none')}
+            ${st('网关单元', e.frpcGatewayUnit, 'none')}
+          </div>
+        </details>
+      </div>`).join('') + `</div>`;
+  };
+
+  const renderCfgFacts = (f) => {
+    if (!f.cfg) return '';
+    return `<div class="sec-h">配置事实</div><div class="group group--inset">
+      ${st('允许重启', String(f.cfg.allowRestart), 'none')}
+      ${st('日志尾行数', String(f.cfg.logTailLines), 'none')}
+      <div class="row"><span class="row__label">端点列表编辑处</span><span class="row__value mono">cordis.patch.yml</span></div>
+      <div class="row"><span class="row__label">当前选择持久化于</span><span class="row__value mono">${esc(f.cfg.stateFile)}</span></div>
+    </div>`;
+  };
+
+  /* ── 扫码配对分区（0.1.19）──────────────────────────────────────────
+     数据形状对齐 client.js pairBlock / host pairOp：
+       pair === null               → 还没查过（不编造支持与否）
+       pair.supported === false    → relay 未开 PhoneDevicesFile（501 透传）
+       pair.qr && remaining > 0    → 码活着：SVG + 倒计时
+       pair.qr && remaining === 0  → 码过期：图变暗 + 「点刷新重新生成」
+       pair.devices                → 已配对列表（名字/最后在线/撤销两步确认）
+     稿内交互只改本地状态机：mint 置新码（120s）、撤销先确认后移行。 */
+  const PAIRS = {
+    P1: { supported: true, qr: { ttl: 96 }, devices: [
+      { deviceId: 'ph_9Qm2', name: 'Pixel 8', lastSeenAt: '2026/11/10 01:02' },
+      { deviceId: 'ph_Xk1p', name: 'iPad（备用）', lastSeenAt: '2026/11/08 22:41' },
+    ], confirm: '', msg: null },
+    P2: { supported: true, qr: null, devices: [], confirm: '', msg: null },
+    P3: { supported: true, qr: { ttl: 0 }, devices: [
+      { deviceId: 'ph_9Qm2', name: 'Pixel 8', lastSeenAt: '2026/11/10 01:02' },
+    ], confirm: '', msg: null },
+    P4: { supported: false, qr: null, devices: null, confirm: '', msg: null },
+  };
+  let pairCur = 'P1';
+
+  /* QR 占位：不是真码（稿子不铸码），只表达「这里有一张 164px 的码 + 静区」。
+     用 currentColor 的点阵，颜色仍由令牌决定。 */
+  const qrPlaceholder = () => {
+    let cells = '';
+    const n = 21, cell = 6, off = 19;
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+      const finder = (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7);
+      const on = finder
+        ? (r % 6 === 0 || c % 6 === 0 || (r % 6 >= 2 && r % 6 <= 4 && c % 6 >= 2 && c % 6 <= 4))
+        : ((r * 31 + c * 17 + r * c) % 5) < 2;
+      if (on) cells += `<rect x="${off + c * cell}" y="${off + r * cell}" width="${cell}" height="${cell}"/>`;
+    }
+    return `<svg viewBox="0 0 164 164" width="164" height="164" fill="currentColor" aria-hidden="true">${cells}</svg>`;
+  };
+
+  const renderPair = () => {
+    const p = PAIRS[pairCur];
+    if (p.supported === false) {
+      return `<p class="banner banner--warn" style="margin-top:14px"><span class="dot"></span>此 relay 未启用设备配对（PhoneDevicesFile 未配置）；升级 relay 并在配置中开启后可用。</p>`;
+    }
+    const qrAlive = p.qr && p.qr.ttl > 0;
+    const qrBox = p.qr
+      ? `<div class="pair__qrbox">
+          <div class="pair__qr${qrAlive ? '' : ' pair__qr--expired'}" aria-label="手机配对二维码">${qrPlaceholder()}</div>
+          <span class="pair__ttl">${qrAlive ? `剩余 <span class="num">${p.qr.ttl}</span>s` : '码已过期，点刷新重新生成'}</span>
+        </div>`
+      : '';
+    const devs = (p.devices || []).map((d) => `
+      <div class="pair__dev">
+        <span class="pair__dev-name">${esc(d.name)}</span>
+        <span class="pair__dev-seen">${esc(d.lastSeenAt)}</span>
+        <span class="pair__dev-acts">${p.confirm === d.deviceId
+          ? `<button class="iconbtn" type="button" data-pair-revoke="${esc(d.deviceId)}" aria-label="确认撤销" title="确认撤销">${icon('check')}</button>
+             <button class="iconbtn" type="button" data-pair-cancel="1" aria-label="取消" title="取消">${icon('close')}</button>`
+          : `<button class="iconbtn" type="button" data-pair-confirm="${esc(d.deviceId)}" aria-label="撤销此设备" title="撤销此设备">${icon('close')}</button>`}
+        </span>
+      </div>`).join('');
+    return `<div class="pair" style="margin-top:14px">
+        ${qrBox}
+        <div class="pair__acts">
+          <span class="pair__acts-l">配对码</span>
+          <span class="pair__acts-r">
+            <button class="iconbtn" type="button" data-pair-mint="1" aria-label="生成 / 刷新二维码" title="生成 / 刷新二维码">${icon('refresh')}</button>
+            ${p.qr ? `<button class="iconbtn" type="button" data-pair-copy="1" aria-label="复制配对载荷" title="复制配对载荷">${icon('copy')}</button>` : ''}
+          </span>
+        </div>
+        ${devs || '<div class="pair__dev"><span class="pair__dev-name t-secondary">还没有已配对的设备（0 台）</span></div>'}
+        ${p.msg ? `<p class="banner ${p.msg.tone === 'good' ? 'banner--warn' : 'banner--bad'}" style="margin:0"><span class="dot ${p.msg.tone === 'good' ? 'dot--ok' : 'dot--bad'}"></span>${esc(p.msg.text)}</p>` : ''}
+      </div>`;
+  };
+
+  let cur = 'F1';
+
+  const paint = (animate) => {
+    const f = FATES[cur];
+    const host = document.getElementById('body');
+    host.innerHTML = `
+      <div class="sec-head">
+        <div class="sec-h">状态</div>
+        <button class="iconbtn${f.busy ? ' iconbtn--busy' : ''}" id="refresh" type="button"${f.busy ? ' disabled' : ''} aria-label="${f.busy ? '正在检查…' : '刷新状态'}" title="${f.busy ? '正在检查…' : '刷新状态'}">${icon('refresh')}</button>
+      </div>
+      ${renderStatus(f)}
+      <div class="sec-h">被控入口（${f.cfg ? f.cfg.endpoints.length : '—'} 个）</div>
+      ${renderEndpoints(f)}
+      ${renderPair()}
+      ${renderCfgFacts(f)}`;
+    // 入场由共享层 .stagger 驱动：加在容器上，子元素自动逐条落位
+    host.classList.toggle('stagger', !!animate);
+    document.getElementById('fateTitle').textContent = f.title;
+    document.getElementById('fateNote').textContent = f.note;
+    document.querySelectorAll('#fates .seg__b').forEach((b) => b.classList.toggle('is-on', b.dataset.fate === cur));
+  };
+
+  document.getElementById('fates').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.seg__b');
+    if (!b || b.dataset.fate === cur) return;
+    cur = b.dataset.fate;
+    paint(true);
+  });
+
+  document.getElementById('pairs').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.seg__b');
+    if (!b || b.dataset.pairSet === pairCur) return;
+    pairCur = b.dataset.pairSet;
+    document.querySelectorAll('#pairs .seg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+    paint(true);
+  });
+
+  document.getElementById('themes').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.seg__b');
+    if (!b) return;
+    document.documentElement.dataset.theme = b.dataset.themeSet;
+    document.querySelectorAll('#themes .seg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+  });
+
+  /* 设备档切换：改 <html data-target>，移动/桌面两档的 CSS 全部由它驱动。
+     同时把窗口示意宽度换掉，让"所见即所得"成立（面板宽度跟随档位）。 */
+  document.getElementById('targets').addEventListener('click', (ev) => {
+    const b = ev.target.closest('.seg__b');
+    if (!b) return;
+    document.documentElement.dataset.target = b.dataset.targetSet;
+    document.querySelectorAll('#targets .seg__b').forEach((x) => x.classList.toggle('is-on', x === b));
+    // 重放一次入场：档位切换是"内容重新落位"，不是数据更新
+    paint(true);
+  });
+
+  /* 扫码配对分区的动作（data-pair-*）在 panel 监听器里处理，见下。 */
+
+  /* 面板内的动作：刷新与切换入口都只改本地状态机，不发请求（稿子没有后端）。 */
+  document.getElementById('panel').addEventListener('click', (ev) => {
+    const mint = ev.target.closest('[data-pair-mint]');
+    if (mint) {
+      const p = PAIRS[pairCur];
+      if (p.supported === false) return;
+      p.qr = { ttl: 120 }; p.msg = null;
+      paint(false);
+      return;
+    }
+    const copy = ev.target.closest('[data-pair-copy]');
+    if (copy) {
+      PAIRS[pairCur].msg = { tone: 'good', text: '已复制' };
+      paint(false);
+      return;
+    }
+    const conf = ev.target.closest('[data-pair-confirm]');
+    if (conf) {
+      PAIRS[pairCur].confirm = conf.dataset.pairConfirm;
+      paint(false);
+      return;
+    }
+    const cancel = ev.target.closest('[data-pair-cancel]');
+    if (cancel) {
+      PAIRS[pairCur].confirm = '';
+      paint(false);
+      return;
+    }
+    const rev = ev.target.closest('[data-pair-revoke]');
+    if (rev) {
+      const p = PAIRS[pairCur];
+      p.devices = (p.devices || []).filter((d) => d.deviceId !== rev.dataset.pairRevoke);
+      p.confirm = '';
+      p.msg = { tone: 'good', text: '已撤销；该设备下次请求即被拒' };
+      paint(false);
+      return;
+    }
+    const sw = ev.target.closest('[data-switch]');
+    if (sw) {
+      const id = sw.dataset.switch;
+      Object.values(FATES).forEach((f) => { if (f.cfg) f.cfg.endpoints.forEach((e) => { e.active = e.id === id; }); });
+      const tgt = FATES[cur].cfg.endpoints.find((e) => e.id === id);
+      if (FATES[cur].status) { FATES[cur].status.endpointLabel = tgt ? tgt.label : FATES[cur].status.endpointLabel; }
+      paint(true);
+      return;
+    }
+    if (ev.target.closest('#refresh')) {
+      FATES[cur].busy = true; paint(true);
+      setTimeout(() => { FATES[cur].busy = false; paint(false); }, 900);
+    }
+  });
+
+  // 评审说明限高两行，点一下展开（手机档把注意力还给面板）
+  document.querySelectorAll('.ctrl__note').forEach((n) => {
+    n.addEventListener('click', () => n.classList.toggle('is-open'));
+  });
+
+  /* 按压反馈：pointerdown 立刻给反馈，不等抬起。只加类，绝不 preventDefault。 */
+  document.addEventListener('pointerdown', (ev) => {
+    const el = ev.target.closest('.seg__b, .btn, .ep, .nav__item');
+    if (!el || el.disabled) return;
+    el.classList.add('is-pressed');
+    const off = () => { el.classList.remove('is-pressed'); document.removeEventListener('pointerup', off); document.removeEventListener('pointercancel', off); };
+    document.addEventListener('pointerup', off);
+    document.addEventListener('pointercancel', off);
+  });
+
+  // 首屏也给一次入场：打开稿子就能看到「状态 → 端点 → 配置事实」怎么逐条落位。
+  // 刷新完成后的那次重绘故意不带动画 —— 那是数据更新，不是新内容出现。
+  paint(true);
+  </script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+       落地要点
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <div class="notes">
+    <h2 class="t-title">落地要点（对应真实代码的改造）</h2>
+
+    <div class="kv">
+      <div class="card">
+        <div class="card__title">C1 · 内联样式 → 类 + 令牌</div>
+        <p class="card__sub"><code>BTN</code> / <code>CARD</code> 两个对象常量（写死 <code>borderRadius:6/10</code>、<code>padding:'3px 12px'</code>、<code>lineHeight:1.7</code>）整块删掉，换成 <code>className</code> + <code>&lt;style&gt;</code>：本页的 <code>.act</code> / <code>.ep</code> / <code>.group</code> / <code>.row</code>。React 里 <code>style</code> 对象每次 render 都新建，内联样式也无法响应主题切换（除令牌外没别的机制）。</p>
+      </div>
+      <div class="card">
+        <div class="card__title">C2 · 状态区改 inset-grouped + 同类项合并</div>
+        <p class="card__sub">Row 的 lineHeight:1.7 + justifyContent:space-between 换成 .group .row ： .row__label 左（ flex:1 1 auto; min-width:0 ）、 .row__value 右（ text-align:right; overflow-wrap:anywhere ），行缝由 .row + .row 的 inset 0 1px 0 承担。<strong>再加一层密度：三个 unit 合并成一行摘要</strong>（<code>active · active · active</code>），逐条明细进 <code>&lt;details&gt;</code>（默认收起）—— 状态区 6 行 → 3 行，手机一屏能多出一倍的行。合并不是隐藏：unit 名与状态都在展开层里，一字不改。</p>
+        <p class="card__sub"><code>Row</code> 的 <code>lineHeight:1.7</code> + <code>justifyContent:space-between</code> 换成 <code>.group &gt; .row</code>：<code>.row__label</code> 左（<code>flex:1 1 auto; min-width:0</code>）、<code>.row__value</code> 右（<code>text-align:right; overflow-wrap:anywhere</code>），行缝由 <code>.row + .row</code> 的 <code>inset 0 1px 0 var(--set-line)</code> 给出 —— 列对齐靠行缝，不靠 1.7 倍行距撑。</p>
+      </div>
+      <div class="card">
+        <div class="card__title">C3 · 长值不挤压相邻元素</div>
+        <p class="card__sub"><code>probeUrl</code>、unit 名、<code>stateFile</code> 必须 <code>overflow-wrap:anywhere</code>，且每一级 flex 子项 <code>min-width:0</code>。现状只在个别 span 上写了 <code>overflowWrap</code>，父 div 没写 <code>min-width:0</code>（flex item 默认 <code>min-width:auto</code>），窄面板仍会把「切换到此入口」按钮顶出去。</p>
+      </div>
+    </div>
+
+    <h3 class="sec" style="font-size:15px">宿主主题令牌优先 —— 插件不自创色</h3>
+    <p class="hint" style="max-width:100ch">这个分区跑在 DSH Web 里，颜色必须跟宿主主题走。稿子里的 <code>--set-*</code> 是<strong>「设计意图的表达」</strong>（apple / apple-night 的分层、语义色、灰阶），<strong>不是</strong>落地时插件要引用的令牌名：落地时每个颜色属性写成 <code>var(--dsw-alias-…, var(--set-…))</code> —— 宿主有值就用宿主主题，脱离宿主单独预览时退回 apple 值，两条路都不出现裸色。材质（<code>--set-material-*</code>）与投影（<code>--set-shadow</code>）在宿主没有对应令牌：分区不画自己的材质与投影，层级只用宿主 fill 分层表达；侧栏那条材质是宿主的，别在插件里再画一层。</p>
+
+    <table class="tbl">
+      <tr><th>稿中令牌（设计意图）</th><th>任务给的映射目标</th><th>宿主是否声明</th><th>落地实际应指向</th><th>说明</th></tr>
+      <tr><td><code>--set-text</code></td><td><code>--dsw-alias-text-primary</code></td><td class="gone">未声明（幻影）</td><td><code>--dsw-alias-label-primary</code></td><td>宿主 label 体系是 bluish 灰阶，浅深两档都有</td></tr>
+      <tr><td><code>--set-text-2</code></td><td><code>--dsw-alias-text-secondary</code></td><td class="gone">未声明（幻影）</td><td><code>--dsw-alias-label-secondary</code></td><td>行值、说明文字；12px 小字要够 4.5:1</td></tr>
+      <tr><td><code>--set-text-3</code></td><td>（无）</td><td>—</td><td><code>--dsw-alias-label-tertiary</code> / <code>label-caption</code></td><td>只给 placeholder 与弱标注，不成句</td></tr>
+      <tr><td><code>--set-danger</code></td><td><code>--dsw-alias-text-danger</code></td><td class="gone">未声明（幻影）</td><td><code>--dsw-alias-state-error-primary</code></td><td>banner 底色走宿主语义档 <code>state-error-secondary</code>；稿内已用派生令牌 <code>--set-danger-tint</code> / <code>--set-danger-line</code>（base.css 同源），<strong>不用 <code>color-mix()</code></strong>：<code>build.target=chrome100</code> 不转译它，Chrome&lt;111 / Android WebView 上整条声明静默失效</td></tr>
+      <tr><td><code>--set-ok</code></td><td><code>--dsw-alias-text-success</code></td><td class="gone">未声明（幻影）</td><td><code>--dsw-alias-state-success-primary</code></td><td>「使用中」/ active 的语义色</td></tr>
+      <tr><td><code>--set-warn</code></td><td>（任务没给）</td><td>—</td><td><code>--dsw-alias-state-warn-primary</code>；正文用 <code>state-warn-label</code></td><td><strong>warn 必须落</strong>：F3「设备离线」= 网络通、链路断。宿主 amber 浅深两档都是 amber-500，压白底对比偏低 → 正文用 <code>state-warn-label</code>（amber-600）</td></tr>
+      <tr><td><code>--set-surface</code></td><td><code>--dsw-alias-bg-layer-1</code></td><td>已声明</td><td>分组卡：<code>--dsw-alias-settings-card-fill</code>（= bg-layer-2）</td><td>宿主设置页已有 card fill/stroke 一对，优先复用，别用 layer-1 造第二种卡</td></tr>
+      <tr><td><code>--set-surface-2</code></td><td>（无）</td><td>—</td><td><code>--dsw-alias-bg-layer-2</code> / <code>bg-skeleton</code> 视控件而定</td><td>控件底、chip 底</td></tr>
+      <tr><td><code>--set-bg</code></td><td>（无）</td><td>—</td><td><code>--dsw-alias-bg-base</code></td><td>分区正文容器底色（宿主已给就不填）</td></tr>
+      <tr><td><code>--set-line</code></td><td><code>--dsw-alias-border-subtle</code></td><td class="gone">未声明（幻影）</td><td><code>--dsw-alias-border-l1</code>（行缝）/ <code>--dsw-alias-settings-card-stroke</code>（卡描边）</td><td>行缝要 l1（更弱），卡描边用 card-stroke（= border-l4）</td></tr>
+      <tr><td><code>--set-brand</code>（链接/动作）</td><td>（无）</td><td>—</td><td><code>--dsw-alias-link</code>；实心动作 <code>--dsw-alias-button-primary-fill</code></td><td class="need">注意：<code>--dsw-alias-brand-primary</code> 是 bluish-1000（近黑），不是蓝，别映射过去</td></tr>
+      <tr><td><code>--set-brand-on</code></td><td>（无）</td><td>—</td><td>随宿主按钮令牌走</td><td>插件不该自己画主按钮</td></tr>
+      <tr><td><code>--set-font</code> / <code>--set-font-mono</code></td><td>（无）</td><td>—</td><td>继承宿主字体（不写 font-family）；等宽处 <code>--dsw-alias-markdown-inline-code</code> 只给色、字号自定</td><td class="need"><strong>没有 mono 家族令牌</strong> → 保留 12px + 本地等宽回退</td></tr>
+      <tr><td>（字号）</td><td><code>--dsw-font-size-sm / xs / md</code></td><td class="gone">未声明（幻影）</td><td>字面 <code>12px / 11px / 13px</code>，或宿主 <code>--dsw-font-base-16-font-size</code> 系刻度</td><td class="need">现状 <code>BTN</code>/<code>CARD</code>/<code>Row</code> 引的这三个字号令牌在宿主里不存在，一直在吃 fallback</td></tr>
+      <tr><td><code>--set-radius</code> / <code>--set-radius-sm</code></td><td>（无）</td><td>—</td><td>宿主没有 <code>--dsw-alias-radius-*</code> 令牌</td><td class="need"><strong>没有对应项</strong>：卡片 12px、控件 8px 写死在本插件样式里，属几何不属颜色</td></tr>
+      <tr><td><code>--set-shadow</code> / <code>--set-material-*</code></td><td>（无）</td><td>—</td><td>宿主没有 <code>--dsw-alias-shadow-*</code> / 材质令牌</td><td class="need"><strong>没有对应项</strong>：分区不画投影与材质，层级靠 fill + stroke；材质留给宿主外壳</td></tr>
+    </table>
+
+    <div class="card" style="margin-top:14px">
+      <div class="card__title">C4 · 一个实测结论：现状引用的 <code>--dsw-*</code> 大部分是幻影令牌</div>
+      <p class="card__sub">在 DSH checkout 的 <code>packages/</code> 与 <code>apps/</code> 里逐个 grep：<code>--dsw-alias-text-primary</code> / <code>-text-secondary</code> / <code>-text-danger</code> / <code>-text-success</code> / <code>--dsw-alias-bg-subtle</code> / <code>--dsw-alias-border-subtle</code> / <code>--dsw-font-size-sm|xs|md</code> 的声明数为 <strong>0</strong>（<code>text-primary/-secondary</code> 只出现在仓库笔记里，不在 CSS）。也就是说 <code>BTN</code>/<code>CARD</code>/<code>Row</code> 的 <code>var(--dsw-…, #8884)</code> 每次都在吃硬编码 fallback：边框恒 <code>#8884</code>、danger 恒 <code>#e5484d</code>、success 恒 <code>#30a46c</code> —— 插件切浅色/深色主题时这个分区不会跟。这是「宿主令牌优先」那条最重要的实装前提：<strong>先改成宿主真存在的令牌名（上表第四列），再谈分层</strong>。</p>
+    </div>
+
+    <div class="kv">
+      <div class="card">
+        <div class="card__title">C5 · 新增 warn 文案必须 zh / en 同补</div>
+        <p class="card__sub">F3 用了 warn 档，需要新键（现字典里只有 <code>status.deviceOffline</code> 一个词，没有「链路断」的成句说明）。建议：<code>status.warn.linkDown</code>、<code>status.warn.whatToDo</code>。<strong>原拟的 <code>dock.warn.linkDown</code> 作废</strong> —— dock 徽章已整个移除（见上），不再需要为它配键。两栏一起提交，并跑一次键集合相等校验（<code>zh</code> 与 <code>en</code> 的 key diff 必须为空）。</p>
+      </div>
+      <div class="card">
+        <div class="card__title">C6 · 有意的语义改动（改动都要落到代码，不是只落在稿里）</div>
+        <p class="card__sub">① <code>relay.reachable===true &amp;&amp; deviceOnline===false</code>：现状 tone='bad' → 改 warn（<code>relayOk ? 'good' : reachable ? 'warn' : 'bad'</code>）。② Windows 的 <code>start_pending/stop_pending</code>：现状 bad → 建议 warn。③ 空列表（<code>config.empty</code> / <code>node.empty</code>）：现状 danger → 建议中性 <code>.empty</code> + 点名 cordis.patch.yml，danger 只留给请求失败。④ dock 的 <code>busy</code>：现状整条换成 <code>…</code> → 建议保留 label + <code>disabled</code>。</p>
+      </div>
+      <div class="card">
+        <div class="card__title">C13 · 扫码配对分区（0.1.19 新增）</div>
+        <p class="card__sub">真实落点：<code>client.js</code> 的 <code>pairBlock</code>（在端点列表与数据面安装之间）+ host <code>pairOp</code>（mint/status/devices/revoke 四个 action 打 relay 管理路由）。稿内 P1–P4 四态：码活着（倒计时是事实，不是装饰）/ 未生成（中性引导，不是错误）/ 已过期（图变暗 + 文案换，不静默续期）/ relay 未启用（501 透传成 warn banner，点名 PhoneDevicesFile）。撤销是两步确认（× → ✓/×），防误触；QR 载荷只有 <code>{v,relay,ca,code}</code>，管理 token 不进 QR 不进 client 响应（插件测试有泄 token 变异检验钉住）。</p>
+      </div>
+      <div class="card">
+        <div class="card__title">C7 · 不动的部分（诚实性约束）</div>
+        <p class="card__sub"><code>status===null</code> 不兜底任何字段；<code>online==='unknown'</code> / <code>state==='unknown'</code> 不给 tone 也不给绿；<code>verdict</code> 与 <code>body.error</code> / <code>HTTP xxx</code> 一律原文；服务行显示 unit 名原文（<code>svc.label || svc.name</code>），不意译成「隧道/frpc/网关」这种丢掉 <code>.service</code> 后缀的说法。</p>
+      </div>
+    </div>
+
+    <h3 class="sec" style="font-size:15px">实测对比（我算了，不是估的）</h3>
+    <div class="card">
+      <p class="card__sub">判据来自 <code>docs/设计规范.md</code>：正文与小字 ≥4.5:1，图形/发丝线按 WCAG 1.4.11 ≥3:1。<code>derived.json</code> 已钉住 tint/line/ring，我复算一遍并补了语义色<strong>直接当文字</strong>的那几档 —— 结论改变了稿子里「active 用绿字」这个直觉做法。</p>
+      <table class="tbl">
+        <tr><th>语义色当文字用</th><th>压白卡（浅）</th><th>压深色卡</th><th>判定</th></tr>
+        <tr><td><code>--set-ok</code> #1a8f4a</td><td class="need">4.14 ✗</td><td>8.42 ✓</td><td><strong>浅色不够</strong> → 绿色只给点子与卡框（非文字 ≥3:1，4.14 通过），文字用 <code>--set-text</code> + 600 字重，词「使用中 / active」才是主载体</td></tr>
+        <tr><td><code>--set-warn</code> #b25000</td><td>5.20 ✓</td><td>12.05 ✓</td><td>可上文字（F3「设备离线」就是 warn 文字）</td></tr>
+        <tr><td><code>--set-danger</code> #d70015</td><td>5.38 ✓</td><td>4.99 ✓</td><td>可上文字（F4 的 HTTP 码原文）</td></tr>
+        <tr><td><code>--set-text-2</code> #6e6e73</td><td>5.07 ✓</td><td>6.61 ✓</td><td>行值与说明可用；<code>--set-text-3</code> 压白卡 3.62 → 只给弱标注，不成句</td></tr>
+        <tr><td>中性点子（unknown）</td><td>3.62 ✓</td><td>3.36 ✓</td><td>≥3:1（图形档）：unknown 的灰点「看得见」，压画布是 3.33 / 3.83 也都过；含义由旁边的 <code>unknown</code> 原文承担，不靠颜色</td></tr>
+        <tr><td class="gone">宿主 <code>state-success-primary</code> green-500</td><td class="gone">2.28 ✗</td><td>7.47 ✓</td><td class="need">浅色照搬宿主 success 上文字<strong>更糟</strong>（2.28 vs apple 的 4.14）→ 稿子里 success 只映射到图形层（点 / 卡框，≥3:1 达标）；深色档 7.47 够，但两档极性不一致 = 落地要逐档验，不能一次映射通吃</td></tr>
+        <tr><td class="gone">宿主 <code>state-warn-primary</code> amber-500</td><td class="gone">2.15 ✗</td><td class="need">warn 文字别用 primary</td><td class="need">用 <code>state-warn-label</code>（amber-600，浅色 2.79 仍不够 / 深色 6.09 够）→ 两档都当文字都不稳，<strong>warn 文字在宿主里也建议 label + 加粗</strong>，颜色只作冗余</td></tr>
+      </table>
+      <p class="card__sub" style="margin:10px 0 0"><strong>这条实测改变的不只是稿子</strong>：真实代码 <code>Row</code> 的 <code>tone==='good'</code> 走 <code>var(--dsw-alias-text-success,#30a46c)</code> —— 幻影令牌吃 fallback，而那个 fallback 压白卡只有 3.16:1，比 apple 的 4.14 还差。落地时「active 绿字」这件事本身就该改：颜色留给图形，文字交给词 + 字重。</p>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="card__title">验收</div>
+      <p class="card__sub"><code>cd design &amp;&amp; node tools/check.mjs</code> —— 闸门会失败；规则清单由脚本自己打印（汇总行取自 RULES 数组，加规则忘登记会自己报错），本页不重述条数以免漂移。</p>
+    </div>
+  </div>
+
+    </div><!-- /review__body -->
+  </details><!-- /review -->
+
+</div>
+</body>
+</html>

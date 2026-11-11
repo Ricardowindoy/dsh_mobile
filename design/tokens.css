@@ -1,0 +1,169 @@
+/* ============================================================================
+ * dsh_mobile 设计集 · 令牌（apple 风格）
+ * ----------------------------------------------------------------------------
+ * 本文件由 tools/gen-tokens.mjs 生成，请勿手改（改了会被下次生成覆盖）。
+ *   浅色层  = ~/project/dsh-ui-designer/styles/apple.css —— 逐字节原文
+ *   深色层  = 同目录 styles/palettes.json 的 apple-night.tokens —— 逐值原文
+ * 深色层挂在 html[data-theme="dark"] 与任意 [data-theme="dark"] 子树上，好让一页里
+ * 并排对照两套主题。不在 design.json 声明 palette：插件的 palette 层注入到 <head>
+ * 的 :root（index.js paletteStyleTag），会把所有页面统一压成深色。
+ *
+ * 末尾派生层不是上游值：算式、alpha、判据与实测对比都在 tools/derived.json，
+ * 由 tools/check.mjs 复算。不用 color-mix()：vite build.target=chrome100，
+ * color-mix 要 Chrome 111+，在 Android WebView 上整条声明会静默失效。
+ * ========================================================================== */
+
+/* apple —— 苹果设计语言（WWDC《Designing Fluid Interfaces》《Details of UI Typography》+
+ * 《Principles of Great Design》整理版，经 github.com/emilkowalski/skills 的 apple-design 技能转译）。
+ * 来源与署名见 styles/index.json 的 source 字段；本文件由人工选定数值，不是上游给的 CSS。
+ *
+ * 取向：系统字体 + 尺寸相关字距/行高；大圆角与柔和分层；chrome 用半透明材质；
+ * 动效用 spring 语言（阻尼比 + 响应时长），按压即时反馈，减少动态时不位移只淡入。 */
+:root {
+  /* 画布与表面：Apple 的分组灰底 + 纯白卡片 */
+  --set-bg: #f5f5f7;
+  --set-surface: #ffffff;
+  --set-surface-2: #fafafc;
+  --set-line: rgba(0, 0, 0, .08);
+  /* 文字：Apple 的 label 灰阶（近黑而非纯黑） */
+  --set-text: #1d1d1f;
+  --set-text-2: #6e6e73;
+  --set-text-3: #86868b;
+  /* 品牌与语义：systemBlue 的可读版本；白字压 #0071e3 达 AA */
+  --set-brand: #0071e3;
+  --set-brand-on: #ffffff;
+  --set-ok: #1a8f4a;
+  --set-warn: #b25000;
+  --set-danger: #d70015;
+  /* 形状与排版：Apple 以 8pt 为基准，控件 8、卡片 12、面板 18 */
+  --set-radius: 12px;
+  --set-radius-sm: 8px;
+  --set-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --set-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --set-font-mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --set-density: comfortable;
+  --set-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 8px 24px rgba(0, 0, 0, .08);
+  /* 动效：弹簧参数是上游原文（阻尼比/响应），贝塞尔是 web 侧近似（上游没有给曲线） */
+  --set-spring-damping: 1;
+  --set-spring-damping-bouncy: 0.8;
+  --set-spring-response: 0.4s;
+  --set-spring-response-sheet: 0.3s;
+  --set-ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --set-ease-in-out: cubic-bezier(0.42, 0, 0.58, 1);
+  --set-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --set-dur-press: 120ms;
+  --set-dur-fast: 160ms;
+  --set-dur-panel: 400ms;
+  --set-press-scale: 0.97;
+  --set-enter-scale: 0.96;
+  --set-stagger: 50ms;
+  /* 材质：半透明 chrome + 背景模糊；数字按 Apple 常见 20px/180% 近似 */
+  --set-material-bar: rgba(255, 255, 255, .72);
+  --set-material-blur: 20px;
+  --set-material-saturate: 180%;
+  --set-material-edge: rgba(255, 255, 255, .6);
+}
+body {
+  margin: 0;
+  background: var(--set-bg);
+  color: var(--set-text);
+  font: 15px/1.47 var(--set-font);
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+h1, h2, h3 {
+  font-family: var(--set-font-display);
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+  font-optical-sizing: auto;
+}
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; }
+h2 { font-size: 2rem; font-weight: 600; }
+h3 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.016em; }
+code, .mono { font-family: var(--set-font-mono); font-size: 13px; }
+.num, .count, table td[data-num] { font-variant-numeric: tabular-nums; }
+a, button, [role="button"] {
+  transition: transform var(--set-dur-press) var(--set-ease-out), opacity var(--set-dur-press) var(--set-ease-out);
+}
+a:active, button:active, [role="button"]:active { transform: scale(var(--set-press-scale)); }
+@media (hover: hover) and (pointer: fine) {
+  a:hover, button:hover, [role="button"]:hover { opacity: .82; }
+}
+/* 半透明 chrome：内容从下面滚过去，而不是被一条实色横条切掉 */
+.toolbar, .bar, nav {
+  background: var(--set-material-bar);
+  -webkit-backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  border-top: 1px solid var(--set-material-edge);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms; animation-duration: .01ms; }
+  a:active, button:active, [role="button"]:active { transform: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .toolbar, .bar, nav { background: var(--set-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  .toolbar, .bar, nav { background: var(--set-surface); border: 1px solid var(--set-text); }
+}
+
+/* ---- 深色：apple-night 官方值 ---- */
+html[data-theme="dark"],
+[data-theme="dark"] {
+  --set-bg: #0d0d0f;
+  --set-surface: #1c1c1e;
+  --set-surface-2: #26262a;
+  --set-line: #3a3a3e;
+  --set-text: #f5f5f7;
+  --set-text-2: #a1a1a6;
+  --set-text-3: #6e6e73;
+  --set-brand: #3d9dff;
+  --set-brand-on: #041e33;
+  --set-ok: #30d158;
+  --set-warn: #ffd60a;
+  --set-danger: #ff453a;
+  --set-shadow: 0 14px 34px -18px rgba(0,0,0,.6);
+}
+
+/* ---- 派生层（算式见 tools/derived.json，check.mjs 复算） ---- */
+:root {
+  /* 出处：apple.css 头部注释「控件 8、卡片 12、面板 18」——注释有值、令牌缺失 */
+  --set-radius-panel: 18px;
+  /* 出处：本设计集自加，上游没有胶囊档 */
+  --set-radius-pill: 999px;
+  /* 出处：本设计集自加，面板级抬起 */
+  --set-shadow-lift: 0 2px 6px rgba(0, 0, 0, .06), 0 18px 40px -20px rgba(0, 0, 0, .18);
+  --set-danger-tint: rgba(215, 0, 21, 0.05);
+  --set-warn-tint: rgba(178, 80, 0, 0.04);
+  --set-ok-line: rgba(26, 143, 74, 0.3);
+  --set-danger-line: rgba(215, 0, 21, 0.3);
+  --set-warn-line: rgba(178, 80, 0, 0.3);
+  --set-ring: rgba(0, 113, 227, 0.22);
+  --set-ok-ink: #178143;
+  --set-warn-ink: #b25000;
+  --set-danger-ink: #d70015;
+  --set-brand-ink: #006cda;
+  --set-placeholder: #86868b;
+  --set-material-bar: rgba(255, 255, 255, 0.72);
+  --set-material-edge: rgba(0, 0, 0, .08);
+}
+
+html[data-theme="dark"],
+[data-theme="dark"] {
+  /* 深色下抬起阴影要更重，否则分层看不出来（浅色那档压黑底等于没有） */
+  --set-shadow-lift: 0 2px 8px rgba(0, 0, 0, .5), 0 20px 44px -20px rgba(0, 0, 0, .7);
+  --set-danger-tint: rgba(255, 69, 58, 0.08);
+  --set-warn-tint: rgba(255, 214, 10, 0.1);
+  --set-ok-line: rgba(48, 209, 88, 0.3);
+  --set-danger-line: rgba(255, 69, 58, 0.3);
+  --set-warn-line: rgba(255, 214, 10, 0.3);
+  --set-ring: rgba(61, 157, 255, 0.26);
+  --set-ok-ink: #30d158;
+  --set-warn-ink: #ffd60a;
+  --set-danger-ink: #ff453a;
+  --set-brand-ink: #3d9dff;
+  --set-placeholder: #88888d;
+  --set-material-bar: rgba(28, 28, 30, 0.72);
+  --set-material-edge: rgba(255, 255, 255, .1);
+}

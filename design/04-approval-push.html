@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-target="touch">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · 审批推送卡片 · dsh_mobile Apple 三端</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./base.css">
+<style>
+/* =============================================================================
+ * 04 · 审批推送卡片（0.1.19 / WP4）—— 稿子自己的样式
+ * -----------------------------------------------------------------------------
+ * 画的是 Android 原生通知（Kotlin NotifyBridge.kt 的 NotificationCompat 卡片），
+ * 不是 WebView 页面：通知由系统画在锁屏/通知栏/heads-up 上，材质与圆角跟随
+ * 系统（Android 12+ 大圆角），这里用 apple 令牌表达"同一套设计语言"的意图。
+ * 落地映射：稿中 .noti ≈ NotificationCompat.Builder + BigTextStyle；
+ * 两个 action ≈ addAction(0,"允许一次"/"拒绝", PendingIntent)。
+ * 颜色一律 var(--set-*)；通知底色用 --set-surface（系统通知卡片是实色层，
+ * 不是半透明材质——材质留给 chrome，别叠在通知上）。
+ *
+ * 三态 + 两个语义规则（与插件/relay 测试一一对应）：
+ *   N1 approval 卡：标题=「审批等待：工具名」，正文=reason 截断，两 action
+ *   N2 question 卡：标题=「dsh 有新提问」，正文恒「点击查看并处理」——
+ *      问题文本不上通知（隐私规则，插件变异检验钉住）
+ *   N3 retract：GUI 先答 → 系统撤卡（这里画"已处理"回执态供评审对照）
+ *   超时 fail-closed：无人应答 110s → unavailable（拒绝），通知由插件 retract
+ * ======================================================================== */
+
+.wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 48px; }
+.lede { margin: 10px 0 0; max-width: 78ch; font-size: 13px; line-height: 1.65;
+        letter-spacing: .006em; color: var(--set-text-2); }
+.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+.toc a { color: inherit; text-decoration: none; }
+.toc a:hover .pill { color: var(--set-brand-ink); }
+h2.sec { margin: 34px 0 0; font-size: 13px; font-weight: 600; letter-spacing: .02em;
+         color: var(--set-text-2); }
+.devrow { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; margin: 18px 0 0; }
+.devwrap { min-width: 0; }
+
+/* 通知所在的"屏幕"：只是背景画布，通知卡片浮在上面 */
+.dev--n { width: 390px; height: 420px; }
+.nscreen { height: 100%; display: flex; flex-direction: column; gap: 12px;
+           padding: 18px 14px; background: var(--set-bg); color: var(--set-text);
+           min-width: 0; overflow: hidden; }
+.nscreen__wall { flex: 1 1 auto; display: grid; place-items: center;
+                 font-size: 12px; letter-spacing: .02em; color: var(--set-text-2); }
+
+/* ---------- 通知卡片（系统通知的稿面表达） ---------- */
+.noti { flex: 0 0 auto; border-radius: var(--set-radius-panel);
+        background: var(--set-surface); box-shadow: var(--set-shadow-lift);
+        padding: 14px 16px 10px; min-width: 0;
+        animation: enter-card var(--set-spring-response) var(--set-ease-out) both; }
+.noti__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.noti__app { flex: 0 0 auto; width: 18px; height: 18px; border-radius: var(--set-radius-sm);
+             display: grid; place-items: center; background: var(--set-surface-2);
+             box-shadow: inset 0 0 0 1px var(--set-line); color: var(--set-text-2); }
+.noti__appname { flex: 1 1 auto; min-width: 0; font-size: 12px; letter-spacing: .02em;
+                 color: var(--set-text-2); white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; }
+.noti__time { flex: 0 0 auto; font-size: 11px; color: var(--set-text-2);
+              font-variant-numeric: tabular-nums; }
+.noti__title { margin: 8px 0 0; font-family: var(--set-font-display); font-size: 15px;
+               font-weight: 600; letter-spacing: -0.016em; line-height: 1.25;
+               min-width: 0; overflow-wrap: anywhere; }
+.noti__body { margin: 3px 0 0; font-size: 13px; line-height: 1.45;
+              color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.noti__actions { display: flex; gap: 8px; margin-top: 10px; }
+.noti__act { flex: 1 1 0; min-width: 0; min-height: 44px; display: inline-flex;
+             align-items: center; justify-content: center; gap: 6px;
+             border: 0; border-radius: var(--set-radius-sm); cursor: pointer;
+             font: 500 14px/1 var(--set-font); letter-spacing: .006em;
+             touch-action: manipulation;
+             transition: transform var(--set-dur-press) var(--set-ease-out),
+                         opacity var(--set-dur-press) var(--set-ease-out); }
+.noti__act:active { transform: scale(var(--set-press-scale)); }
+.noti__act--allow { background: var(--set-brand); color: var(--set-brand-on); }
+.noti__act--reject { background: var(--set-surface-2); color: var(--set-text);
+                     box-shadow: inset 0 0 0 1px var(--set-line); }
+.noti__hint { margin: 8px 0 0; font-size: 11px; letter-spacing: .02em;
+              color: var(--set-text-2); }
+
+/* 已处理回执（retract 后系统撤卡；这里画的是 App 内可见的兜底态） */
+.noti--settled { opacity: .72; }
+.noti__settled { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+                 padding: 3px 10px; border-radius: var(--set-radius-sm);
+                 font-size: 12px; font-weight: 500; line-height: 1.6;
+                 color: var(--set-ok-ink); background: var(--set-surface-2);
+                 border: 1px solid var(--set-ok-line); }
+.noti__settled i { width: 6px; height: 6px; border-radius: 999px;
+                   background: currentColor; flex: 0 0 auto; }
+
+/* ---------- 桌面说明分区（approval-push-plugin client.js 的稿面） ---------- */
+.desktop-note { max-width: 640px; }
+.rules { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.rules li { display: flex; gap: 10px; align-items: flex-start; font-size: 13px;
+            line-height: 1.55; color: var(--set-text-2); min-width: 0; }
+.rules li::before { content: ""; flex: 0 0 auto; width: 6px; height: 6px;
+                    border-radius: 999px; background: var(--set-brand);
+                    margin-top: 7px; }
+.rules strong { color: var(--set-text); font-weight: 600; }
+
+.note { margin: 14px 0 0; font-size: 12px; line-height: 1.6; color: var(--set-text-2); }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--set-line);
+         min-width: 0; vertical-align: top; overflow-wrap: anywhere; }
+th { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); font-weight: 600; }
+td code { font-family: var(--set-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .noti { animation-duration: .01ms; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1 class="t-large-title">04 · 审批推送卡片</h1>
+  <p class="lede">agent 请求审批 / 提问时，已配对手机收到的<strong>原生通知</strong>（不是 WebView 页面）。
+    语义借自上游 dsh-remote-bridge：<strong>有订阅才认领、沉默不是同意、先答先赢</strong>。
+    稿面用 apple 令牌表达设计意图；落地是 Kotlin <code>NotificationCompat</code>，
+    圆角与材质跟随 Android 系统。桌面侧只有一个说明分区（<code>approval-push-plugin/client.js</code>），
+    审批操作本体仍在桌面 GUI —— 通知卡片是增益，不替代。</p>
+
+  <div class="toc">
+    <a class="pill" href="#n1">① 审批卡</a>
+    <a class="pill" href="#n2">② 提问卡（无文本）</a>
+    <a class="pill" href="#n3">③ 已处理 / retract</a>
+    <a class="pill" href="#n4">④ 桌面说明分区</a>
+    <a class="pill" href="#diff">差异 / 待验证</a>
+  </div>
+
+  <h2 class="sec" id="n1">① 审批卡（approval）：标题带工具名，正文是 reason 截断，两个 action 直接决定</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390 宽 · 浅色 · heads-up：允许一次 / 拒绝 都是 44px 命中区；点正文进 App</p>
+      <div class="device dev--n">
+        <div class="nscreen">
+          <div class="noti" role="group" aria-label="审批通知">
+            <div class="noti__head">
+              <span class="noti__app" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+              </span>
+              <span class="noti__appname">dsh</span>
+              <span class="noti__time num">现在</span>
+            </div>
+            <p class="noti__title">审批等待：bash</p>
+            <p class="noti__body">需要执行：rm -rf /tmp/build-cache（清理构建缓存目录）</p>
+            <div class="noti__actions">
+              <button class="noti__act noti__act--allow" type="button">允许一次</button>
+              <button class="noti__act noti__act--reject" type="button">拒绝</button>
+            </div>
+            <p class="noti__hint">110 秒内无人应答将自动拒绝（沉默不是同意）</p>
+          </div>
+          <div class="nscreen__wall">通知之下是系统壁纸 / 锁屏（稿内以画布代）</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="devwrap">
+      <p class="device__label">390 宽 · 深色（apple-night）· 同一张卡：语义色与文字档整层换值</p>
+      <div class="device dev--n" data-theme="dark">
+        <div class="nscreen">
+          <div class="noti" role="group" aria-label="审批通知">
+            <div class="noti__head">
+              <span class="noti__app" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+              </span>
+              <span class="noti__appname">dsh</span>
+              <span class="noti__time num">现在</span>
+            </div>
+            <p class="noti__title">审批等待：bash</p>
+            <p class="noti__body">需要执行：rm -rf /tmp/build-cache（清理构建缓存目录）</p>
+            <div class="noti__actions">
+              <button class="noti__act noti__act--allow" type="button">允许一次</button>
+              <button class="noti__act noti__act--reject" type="button">拒绝</button>
+            </div>
+            <p class="noti__hint">110 秒内无人应答将自动拒绝（沉默不是同意）</p>
+          </div>
+          <div class="nscreen__wall">通知之下是系统壁纸 / 锁屏（稿内以画布代）</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="n2">② 提问卡（question）：只提示「有新提问」，问题文本不上通知（隐私规则）</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390 宽 · 浅色 · 无 action：点整张卡进 App 查看并回答</p>
+      <div class="device dev--n">
+        <div class="nscreen">
+          <div class="noti" role="group" aria-label="提问通知">
+            <div class="noti__head">
+              <span class="noti__app" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+              </span>
+              <span class="noti__appname">dsh</span>
+              <span class="noti__time num">现在</span>
+            </div>
+            <p class="noti__title">dsh 有新提问</p>
+            <p class="noti__body">点击查看并处理</p>
+            <p class="noti__hint">问题内容只在 App 内显示，不经过通知与 relay 推送载荷</p>
+          </div>
+          <div class="nscreen__wall">与审批卡同一渠道（IMPORTANCE_HIGH），但无 action 按钮</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="n3">③ 已处理 / retract：GUI 先答或超时后，系统撤卡；App 内留「已处理」回执</h2>
+  <div class="devrow">
+    <div class="devwrap">
+      <p class="device__label">390 宽 · 浅色 · 回执态（真实系统通知已撤回；这是 App 内可见的兜底记录）</p>
+      <div class="device dev--n">
+        <div class="nscreen">
+          <div class="noti noti--settled" role="group" aria-label="已处理的审批">
+            <div class="noti__head">
+              <span class="noti__app" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h13"/></svg>
+              </span>
+              <span class="noti__appname">dsh</span>
+              <span class="noti__time num">2 分钟前</span>
+            </div>
+            <p class="noti__title">审批等待：bash</p>
+            <p class="noti__body">需要执行：rm -rf /tmp/build-cache（清理构建缓存目录）</p>
+            <span class="noti__settled"><i></i>已在桌面处理</span>
+          </div>
+          <div class="nscreen__wall">retract 消息到达 → NotifyBridge.onCard 撤卡；双击同一 id 的应答会被 relay 410 拒绝</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec" id="n4">④ 桌面说明分区（approval-push-plugin 的 settings.section，order=31）</h2>
+  <div class="card desktop-note">
+    <div class="card__title">审批推送到手机</div>
+    <p class="card__sub">agent 请求审批时，已配对的手机会收到通知卡片，可直接允许一次或拒绝；点击卡片打开 App。</p>
+    <ul class="rules">
+      <li><span><strong>只有手机在线订阅时才接管审批</strong>；手机不在，审批照常留在桌面。</span></li>
+      <li><span><strong>接管后无人应答＝拒绝</strong>（超时自动拒绝，沉默不是同意）。</span></li>
+      <li><span><strong>提问通知不含问题文本</strong>，只提示去 dsh 查看。</span></li>
+    </ul>
+  </div>
+
+  <h2 class="sec" id="diff">与真实代码的差异 / 待验证</h2>
+  <div class="card">
+    <table>
+      <tr><th>项</th><th>真实代码现状</th><th>这张稿子的做法</th><th>为什么 / 怎么落地</th></tr>
+      <tr>
+        <td>通知渲染者</td>
+        <td>Android 系统（<code>NotificationCompat</code>，渠道 <code>dsh-approvals</code> IMPORTANCE_HIGH）；圆角/阴影/字体由系统决定</td>
+        <td>用 apple 令牌画"设计意图"：实色 surface 卡 + 面板级圆角 + 抬起阴影</td>
+        <td>稿面不是像素级复刻系统通知；落地以系统渲染为准，令牌只约束 App 内回执与桌面分区。</td>
+      </tr>
+      <tr>
+        <td>action 语义</td>
+        <td><code>addAction(0,"允许一次"/"拒绝", PendingIntent)</code> → AnswerReceiver → Rust <code>nativeAnswer</code>（设备 token header POST）；decision 闭集两侧各验一次</td>
+        <td>两个 44px 按钮；允许=brand 实心，拒绝=中性面 + 描边</td>
+        <td>「允许一次」是唯一授权档（没有"始终允许"）；重放同一 id 被 relay 410 拒绝，卡片更新为已处理。</td>
+      </tr>
+      <tr>
+        <td>超时提示</td>
+        <td>插件 <code>askTimeoutMs=110000</code> 后 resolve undefined → unavailable；通知由 retract 撤回</td>
+        <td>卡片脚注写明「110 秒内无人应答将自动拒绝」</td>
+        <td><strong>稿面新增的脚注</strong>：真实 Kotlin 卡暂未画这行（系统通知空间有限）；落地可作为 BigText 末行，需真机看折行。</td>
+      </tr>
+      <tr>
+        <td>提问卡正文</td>
+        <td>恒「点击查看并处理」；问题文本不进推送载荷（插件变异检验钉住）</td>
+        <td>与真实一致</td>
+        <td>隐私规则来自 approval-popup-bridge 先例：通知栏可能被旁人看到。</td>
+      </tr>
+      <tr>
+        <td>进程被杀</td>
+        <td>v1 无常驻服务：进程死则 SSE 断、无通知（README 已知限制）</td>
+        <td>未画"离线错过"态</td>
+        <td><strong>待验证</strong>：真机杀进程后是否确实无通知、重开 App 后 pending 表是否补发（插件重连重放语义）。</td>
+      </tr>
+      <tr>
+        <td>POST_NOTIFICATIONS 被拒</td>
+        <td>Kotlin 捕获 SecurityException 降级为 App 内可见（cards 表仍在）</td>
+        <td>③ 的回执态即该降级的可见形态</td>
+        <td>权限拒绝不崩、不静默丢卡。</td>
+      </tr>
+    </table>
+    <p class="note">闸门：<code>node design/tools/check.mjs</code>。本页颜色全部来自 <code>var(--set-*)</code>，
+      动效只碰 transform / opacity，action 命中区 44px。语义规则（claim / fail-closed / retract / 隐私）
+      的权威在插件与 relay 测试，不在稿子。</p>
+  </div>
+
+  <p class="note"><a href="./index.html" style="color: var(--set-brand-ink)">← 返回总览</a></p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# Relay 部署：单容器跑 dsh-relay。
+# TLS 证书挂载到容器内；也可去掉 443 映射改用前置反代（见 docs/deployment.md）。
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/relay.Dockerfile
+    ports:
+      - "443:443"
+    volumes:
+      - ./pairings.json:/etc/dsh-relay/pairings.json:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    environment:
+      # access token 从宿主机环境注入（勿写死在 compose 文件里）
+      DSH_RELAY_ACCESS_TOKEN: ${DSH_RELAY_ACCESS_TOKEN:?set DSH_RELAY_ACCESS_TOKEN}
+    command:
+      - --listen=:443
+      - --tls-cert=/etc/letsencrypt/live/relay.example.com/fullchain.pem
+      - --tls-key=/etc/letsencrypt/live/relay.example.com/privkey.pem
+      - --pairings=/etc/dsh-relay/pairings.json
+      - --access-token-file=/run/secrets/access_token
+    secrets:
+      - access_token
+    restart: unless-stopped
+
+secrets:
+  access_token:
+    file: ./access-token.txt

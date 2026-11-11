@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间画布色：与 styles.css 的 apple-night 档 set-bg 同值（#0d0d0f）。
+         此前写 #000000，而页面深色画布改成了 apple-night 的 #0d0d0f ——
+         条带比页面黑一档，启动瞬间/JS 推送失败时有可见接缝（亮度差实测可辨）。
+         改 styles.css 的 set-bg 时必须同步这里。 -->
+    <color name="canvas">#FF0D0D0F</color>
+</resources>

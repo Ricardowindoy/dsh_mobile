@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>dsh</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 设置页：三段式骨架 —— 顶部材质栏 / 中部内容（剩余空间居中）/ 贴底材质栏。
+       版式按 apple（iOS inset-grouped）语言：大标题 → 分组卡片 → 行内标签字段。
+       状态栏、刘海与软键盘留白由原生侧 decorView padding 处理（WebView 内
+       env(safe-area-inset-*) 恒为 0），这里只负责视觉留白；条带基色必须与
+       styles.css 的 --set-bg 同值（values / values-night 各自的 @color/canvas）。 -->
+  <main id="setup" hidden>
+    <header class="app-bar">
+      <span class="logo-badge">
+        <img class="logo" src="logo.svg" alt="" />
+      </span>
+      <span class="app-name">dsh</span>
+      <span id="app-version" class="app-version"></span>
+    </header>
+
+    <div class="screen-main">
+      <div class="screen-stack">
+        <h1 class="large-title">连接 dsh</h1>
+        <p id="page-sub" class="page-sub">扫桌面上的配对二维码即可连接；也可以手动填 Relay 地址与 token。</p>
+
+        <!-- 扫码配对：一次性 code 经 Rust POST 兑换，设备 token 不进 URL。
+             相册 = 从相册选截图/照片由 jsQR 静态识别；粘贴 = 剪贴板里的
+             二维码图片或配对码 JSON 文本。
+             非 Tauri/桌面环境整区隐藏（没有相机插件）。 -->
+        <section class="scan">
+          <button id="scan-pair" class="btn-primary btn-primary--with-icon" type="button">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+            <span id="scan-pair-label">扫码配对</span>
+          </button>
+          <div class="scan-alt">
+            <button id="scan-gallery" class="btn-secondary btn-secondary--with-icon" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>相册识别</span>
+            </button>
+            <button id="scan-paste" class="btn-secondary btn-secondary--with-icon" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+              <span>粘贴配对</span>
+            </button>
+          </div>
+          <p class="group-foot scan-note">相机扫码 / 从相册选截图 / 粘贴二维码图片或配对码，三种方式都可以。</p>
+        </section>
+
+        <!-- 密度改造（设计稿 01 · A8/A9）：
+             · 表单不再包"浮起的卡片"，改 inset-grouped 分组（.group）
+             · 字段同行：标签左、输入右（.field-row），每字段一行
+             · 说明合并成一条组脚注（.group-foot），不再每个字段下面挂一句
+             id 契约不变：relay-url / access-token / token-toggle / connect /
+             self-check / self-check-status / error / update / push-log -->
+        <section class="manual">
+          <div class="group-h">手动连接（救急）</div>
+          <div class="group">
+          <form id="connect-form" novalidate autocomplete="off">
+            <div class="field-row">
+              <label class="field-row-label" for="relay-url">Relay 地址</label>
+              <div class="field-row-control">
+                <input id="relay-url" type="url" placeholder="https://relay.example.com"
+                       autocomplete="url" inputmode="url" autocapitalize="none"
+                       autocorrect="off" spellcheck="false" enterkeyhint="next" />
+              </div>
+            </div>
+
+            <div class="field-row">
+              <label class="field-row-label" for="access-token">
+                <span>访问 token</span>
+                <span class="field-tag">可选</span>
+              </label>
+              <div class="field-row-control field-has-action">
+                <input id="access-token" type="password" placeholder="留空则不发送 token"
+                       autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" />
+                <button id="token-toggle" class="field-action" type="button" aria-label="显示或隐藏 token">
+                  <svg id="icon-eye" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <svg id="icon-eye-off" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" hidden><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <p id="error" class="error" role="alert" hidden>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span id="error-text"></span>
+            </p>
+
+            <button id="connect" class="btn-primary btn-primary--with-icon" type="submit">
+              <span>连接 dsh</span>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+
+            <!-- 连接自检：只打 Relay 的控制面端点（不碰设备），用来区分
+                 "网络/地址/token 有问题" 与 "隧道设备离线" 两种失败。 -->
+            <div class="diag-row">
+              <button id="self-check" class="icon-btn" type="button"
+                      aria-label="连接自检" title="连接自检">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              </button>
+              <span id="self-check-status" class="status-pills" hidden></span>
+            </div>
+          </form>
+          </div><!-- /group -->
+          <p class="group-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+        </section>
+
+        <!-- 更新卡片：18px 面板层级 + 从底部升起，语义是 sheet -->
+        <section id="update" class="card update-card" hidden>
+          <p class="update-title">发现新版本 <span id="update-version"></span></p>
+          <p id="update-meta" class="update-meta"></p>
+          <!-- 下载进度条：下载中可见；indeterminate 态（无 Content-Length）走条纹动画 -->
+          <div id="update-progress" class="update-progress" hidden
+               role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div id="update-progress-bar" class="update-progress-bar"></div>
+          </div>
+          <p id="update-progress-count" class="update-progress-count" hidden></p>
+          <p id="update-note" class="update-note"></p>
+          <div class="update-actions">
+            <button id="update-later" class="icon-btn" type="button" aria-label="跳过此版本" title="跳过此版本">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <button id="update-download" class="btn-primary btn-primary--with-icon update-download" type="button" data-state="download">
+              <svg class="ico ico--download" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <svg class="ico ico--install" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg class="ico ico--retry" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+              <span id="update-download-label">下载更新</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="bottom-bar">
+      <button id="push-log" class="icon-btn" type="button"
+              aria-label="推送日志" title="推送日志">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      </button>
+      <span id="push-log-status" class="push-log-status" hidden></span>
+    </div>
+  </main>
+
+  <!-- 连接中：整屏居中 -->
+  <main id="status" hidden>
+    <div class="status-box">
+      <span class="spinner" aria-hidden="true"></span>
+      <p class="status-text">正在连接 dsh…</p>
+    </div>
+  </main>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

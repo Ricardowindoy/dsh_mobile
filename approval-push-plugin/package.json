@@ -1,0 +1,25 @@
+{
+  "name": "@local/dsh-approval-push",
+  "version": "0.1.0",
+  "description": "Approval/question push cards for dsh_mobile: claims approval asks only while a phone is subscribed, pushes notification cards through the relay, resolves from the phone's answer. Fail-closed: silence is never consent.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/zh.json": "./locale/zh.json",
+    "./locale/en.json": "./locale/en.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  }
+}

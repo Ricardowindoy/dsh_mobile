@@ -1,0 +1,460 @@
+/* =============================================================================
+ * dsh_mobile 设计集 · 组件层（base.css）
+ * -----------------------------------------------------------------------------
+ * 只定义"可复用的形状与状态"，颜色一律来自 tokens.css 的 --set-*。
+ * 页面里出现裸色值会被 tools/check.mjs 判失败 —— 这不是风格偏好，是规范：
+ * 换 palette 时页面必须跟着变，写死的值做不到。
+ *
+ * 分层约定（apple 的"材质表达层级"）：
+ *   画布 --set-bg  →  卡片 --set-surface  →  控件/字段 --set-surface-2
+ *   chrome（顶栏/底部栏/侧栏）= 半透明材质 + backdrop-filter，内容从下面滚过去
+ *
+ * 命中区：视觉尺寸可以小，命中区不行（触屏 44px，桌面 28px）。
+ * ========================================================================== */
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html { height: 100%; }
+
+/* 真实 App 的硬规矩（见 README「构建与发布约定」）：hidden 必须压过 display:flex。
+ * 缺这条时带 hidden 的容器照样被画出来 —— 稿子首屏那个"空的错误条"就是这么来的
+ * （DOM 里 hidden=true，计算样式却是 display:flex）。组件层漏一次，所有引用它的
+ * 页面一起静默出错，所以规则放在 base.css，不放单页。 */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--set-bg);
+  color: var(--set-text);
+  /* 正文基线：15px/1.47，字距近 0（尺寸相关字距的中间档） */
+  font: 15px/1.47 var(--set-font);
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1, h2, h3 {
+  font-family: var(--set-font-display);
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+  font-optical-sizing: auto;
+  margin: 0;
+}
+h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; }
+h2 { font-size: 2rem; font-weight: 600; }
+h3 { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.016em; }
+code, .mono { font-family: var(--set-font-mono); font-size: 13px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------- 画布与设备框 ---------- */
+.stage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 24px;
+  align-items: flex-start;
+}
+
+/* 一台"设备"：只是外框，内部就是真实页面的排版 */
+.device {
+  flex: 0 0 auto;
+  min-width: 0;
+  border: 1px solid var(--set-line);
+  border-radius: var(--set-radius-panel);
+  background: var(--set-bg);
+  /* 必须在框上重解析 color：body 的 color 是已解析值，子树继承它而不是重新
+     解析 var()。少了这一条，[data-theme="dark"] 的框里仍是浅色文字 ——
+     实测压深色卡片只有 1.01:1（等于看不见）。 */
+  color: var(--set-text);
+  box-shadow: var(--set-shadow);
+  overflow: hidden;
+}
+.device__label {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  /* text-2 而非 text-3：12px 小字压画布实测 3.33:1，不过 AA 的 4.5:1 */
+  color: var(--set-text-2);
+}
+
+/* ---------- chrome：半透明材质条 ---------- */
+.chrome {
+  background: var(--set-material-bar);
+  -webkit-backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+}
+.chrome--top { border-bottom: 1px solid var(--set-material-edge); }
+.chrome--bottom { border-top: 1px solid var(--set-material-edge); }
+.chrome--side { border-right: 1px solid var(--set-material-edge); }
+
+/* ---------- 卡片（分组表面） ---------- */
+.card {
+  background: var(--set-surface);
+  border-radius: var(--set-radius);
+  box-shadow: var(--set-shadow);
+  padding: 16px;
+  min-width: 0;
+}
+.card--panel {
+  border-radius: var(--set-radius-panel);
+  box-shadow: var(--set-shadow-lift);
+  padding: 18px;
+}
+.card__title {
+  font-family: var(--set-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+  line-height: 1.2;
+  margin: 0 0 4px;
+}
+.card__sub {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0.006em;
+  color: var(--set-text-2);
+}
+
+/* ---------- 排版刻度（尺寸相关字距 + 反向行高） ---------- */
+.t-large-title {
+  font-family: var(--set-font-display);
+  font-size: clamp(26px, 7.6vw, 34px);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+}
+.t-title {
+  font-family: var(--set-font-display);
+  font-size: 17px; font-weight: 600;
+  letter-spacing: -0.016em; line-height: 1.2;
+}
+.t-body { font-size: 15px; letter-spacing: -0.003em; line-height: 1.47; }
+.t-footnote { font-size: 12px; letter-spacing: 0.01em; line-height: 1.45; }
+.t-caption { font-size: 11px; letter-spacing: 0.02em; line-height: 1.35; }
+.t-secondary { color: var(--set-text-2); }
+/* text-3 只用于 ≥18.66px 大字或纯图形（placeholder、图标）。
+   11–12px 小字压白卡实测 3.33–3.62:1，不达 AA 的 4.5:1，所以弱一档的
+   "次要说明"仍走 text-2；需要更弱时先加大字号，而不是压低对比。 */
+.t-tertiary { color: var(--set-text-2); }
+
+/* ---------- inset-grouped 列表（iOS 设置页的骨架） ---------- */
+.group {
+  background: var(--set-surface);
+  border-radius: var(--set-radius);
+  box-shadow: var(--set-shadow);
+  overflow: hidden;
+  min-width: 0;
+}
+/* 表面内的行容器（inset-grouped 的"组"坐在卡片里时）：
+ * 不再自带 fill 与投影，否则就是"两层浮起"—— Apple 的层级靠 fill 分层，
+ * 一层表面里只该有一层浮起。分隔靠 inset 描边。 */
+.group--inset {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--set-line);
+}
+/* 独立分组（表单这类"成组控件"用它）：白底 + 投影，自成一层。 */
+.group--fill {
+  background: var(--set-surface);
+  border-radius: var(--set-radius);
+  box-shadow: var(--set-shadow);
+  overflow: hidden;
+  min-width: 0;
+}
+/* 组外的小标题（分区里的「状态」「被控入口」这类）。
+ * 本设计集没有"组内标题"这一档 —— 所有分区标题都在组外，所以不预留 .group__header：
+ * 预留一个没人用的类，读代码的人会以为存在那种约定，而它从没被渲染验证过。 */
+.sec-h {
+  margin: 16px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--set-text-2);
+}
+.sec-h:first-child { margin-top: 0; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 10px 16px;
+  min-width: 0;
+}
+.row + .row { box-shadow: inset 0 1px 0 var(--set-line); }
+.row__label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.row__value {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--set-text-2);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 控件 ---------- */
+.btn {
+  font: inherit;
+  border: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  min-height: 28px;                 /* 桌面下限；触屏档在 .btn--touch */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--set-radius-pill);
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              opacity var(--set-dur-press) var(--set-ease-out);
+}
+.btn--touch { min-height: 44px; }
+.btn--primary {
+  background: var(--set-brand);
+  color: var(--set-brand-on);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding: 14px 18px;
+}
+.btn--secondary {
+  background: var(--set-surface-2);
+  color: var(--set-text);
+  font-size: 15px;
+  padding: 12px 14px;
+}
+.btn:active, .btn.is-pressed { transform: scale(var(--set-press-scale)); }
+.btn[disabled] { opacity: 0.45; cursor: default; transform: none; }
+
+.field { min-width: 0; }
+/* 同行字段（iOS 设置页的骨架）：标签左、控件右。
+ * 竖排（label 上 / input 下）每个字段要吃掉两行 + 6px 间距，
+ * 在 390px 屏上两个字段就占掉 1/3 屏 —— 这是"信息密度低"的主因。
+ * 同行后每个字段 44px 一行，六个字段才占 264px。 */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 14px;
+  min-width: 0;
+}
+.field-row + .field-row { box-shadow: inset 0 1px 0 var(--set-line); }
+.field-row__label {
+  flex: 0 0 auto;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--set-text);
+  white-space: nowrap;
+}
+.field-row__label--sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.field-row__control {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+/* 分组脚注：一行 12px，说明挂在组下而不是每个字段下 */
+.group-foot {
+  margin: 6px 0 0;
+  padding: 0 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  color: var(--set-text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 组标题（组上方的分组名）：比正文小一号、字重轻一档 */
+.group-h {
+  margin: 20px 0 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--set-text-2);
+}
+.group-h:first-child { margin-top: 0; }
+.field__input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;                  /* 低于 16px 触发移动端自动放大 */
+  line-height: 22px;
+  padding: 13px 14px;
+  color: var(--set-text);
+  background: var(--set-surface-2);
+  border: 0;
+  border-radius: var(--set-radius);
+  box-shadow: inset 0 0 0 1px var(--set-line);
+  outline: none;
+  transition: box-shadow var(--set-dur-fast) var(--set-ease-out),
+              background var(--set-dur-fast) var(--set-ease-out);
+}
+/* placeholder 用派生档 --set-placeholder：官方深色 text-3 压在 surface-2 上
+   实测 2.97，够不到本设计集"提示文字 ≥3.0"的自设线（算式见 derived.json） */
+.field__input::placeholder { color: var(--set-placeholder); }
+.field__input:focus {
+  background: var(--set-surface);
+  box-shadow: inset 0 0 0 1px var(--set-brand), 0 0 0 4px var(--set-ring);
+}
+
+/* ---------- 状态语义：颜色 + 文字，不只靠颜色 ---------- */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--set-radius-pill);
+  background: var(--set-surface-2);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  color: var(--set-text-2);
+  min-width: 0;
+}
+.dot {
+  flex: 0 0 auto;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--set-text-3);
+}
+.dot--ok { background: var(--set-ok); }
+.dot--warn { background: var(--set-warn); }
+.dot--bad { background: var(--set-danger); }
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--set-radius);
+  font-size: 13px;
+  line-height: 1.45;
+  min-width: 0;
+}
+/* 染底/描边都来自派生令牌（算式见 tools/derived.json），不用 color-mix()：
+   vite build.target=chrome100，而 color-mix 要 Chrome 111+，在 Android WebView
+   上整条声明会**静默失效**（不报错），届时无色块可寻。
+   注意这里只有一条 box-shadow —— 写两条相同属性，后一条会把前一条覆盖掉。 */
+.banner--bad {
+  color: var(--set-danger-ink);
+  background: var(--set-danger-tint);
+  box-shadow: inset 0 0 0 1px var(--set-danger-line);
+}
+.banner--warn {
+  color: var(--set-warn-ink);
+  background: var(--set-warn-tint);
+  box-shadow: inset 0 0 0 1px var(--set-warn-line);
+}
+
+/* ---------- 空状态：区分"从未产生"与"确实没有" ---------- */
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--set-text-2);
+  min-width: 0;
+}
+.empty__title { font-size: 15px; margin: 0 0 4px; }
+.empty__detail { font-size: 12px; color: var(--set-text-2); margin: 0; }
+
+/* ---------- 弹层 / sheet：从哪进从哪出 ---------- */
+.sheet {
+  border-radius: var(--set-radius-panel) var(--set-radius-panel) 0 0;
+  background: var(--set-surface);
+  box-shadow: var(--set-shadow-lift);
+}
+
+/* ---------- 动效：只碰 transform / opacity ---------- */
+@keyframes enter-card {
+  from { opacity: 0; transform: scale(var(--set-enter-scale)) translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes enter-sheet {
+  from { opacity: 0; transform: translateY(16px) scale(var(--set-enter-scale)); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.enter { animation: enter-card var(--set-spring-response) var(--set-ease-out) both; }
+.enter--2 { animation-delay: var(--set-stagger); }
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover { opacity: 0.82; }
+}
+.btn:focus-visible, .field__input:focus-visible {
+  outline: 2px solid var(--set-brand);
+  outline-offset: 2px;
+}
+
+/* 减弱动态 ≠ 关掉反馈：位移换成短淡入，缩放取消，颜色反馈保留 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms; animation-duration: 0.01ms; }
+  .btn:active, .btn.is-pressed { transform: none; }
+  @keyframes enter-card { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes enter-sheet { from { opacity: 0; } to { opacity: 1; } }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .chrome { background: var(--set-surface); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (prefers-contrast: more) {
+  .chrome { background: var(--set-surface); border-color: var(--set-text); }
+  .card, .group { box-shadow: inset 0 0 0 1px var(--set-text); }
+}
+
+/* ---------- 桌面密度档（data-target="desktop"） ----------
+ * 判据来自宿主真实样式，不是我拍的数：
+ *   packages/client/ui-primitives/src/settings-form/fields.module.css
+ *     → 字段 padding 12px 0、gap 6–8px、图标按钮 24×24、控件 padding 5px 14px
+ *   SettingsForm.module.css → 标签 12px/1.5、正文 13px/1.5、分组 padding-top 16px
+ * 默认那套 .row{min-height:44px} 是移动端触屏档，套进桌面设置面板就是
+ * "浪费空间"的主因（行高虚高 12px、控件比宿主大一档）。 */
+[data-target="desktop"] .row {
+  min-height: 32px;
+  padding: 5px 14px;
+  gap: 10px;
+  font-size: 13px;
+}
+/* 桌面档只收紧间距：字号与颜色沿用共享定义，不在这里重述一遍（两处真值会漂）。 */
+[data-target="desktop"] .sec-h { margin: 14px 0 5px; padding-inline: 0; }
+[data-target="desktop"] .card { padding: 14px; }
+[data-target="desktop"] .card--panel { padding: 16px; }
+[data-target="desktop"] .btn { min-height: 28px; font-size: 13px; padding: 5px 14px; }
+[data-target="desktop"] .field__input { font-size: 13px; padding: 6px 10px; line-height: 18px; }
+[data-target="desktop"] .pill { padding: 2px 8px; font-size: 12px; }
+[data-target="desktop"] .banner { padding: 9px 12px; font-size: 13px; }
+[data-target="desktop"] .empty { padding: 20px 14px; }
+
+/* ---------- 动效：交互稿的入场与状态过渡 ----------
+ * 上一版稿子里 animation 声明数为 0 —— 定义了 enter-card/enter-sheet 却没人用，
+ * 等于把 apple 语言最核心的一档交付成静态截图。.stagger 是那档的复用入口：
+ * 谁做"成组内容依次落位"就用它，不要在页内再造一遍 keyframes。 */
+.stagger > * {
+  animation: enter-card var(--set-spring-response) var(--set-ease-out) both;
+  animation-delay: calc(var(--set-stagger) * var(--i, 0));
+}
+/* 序号用 --i 而不是只写前几条的 nth-child：上一版只覆盖到第 5 个子元素，
+ * 第 6 条起延迟回落到 0s，与第 1 条同时弹出 —— 03 的 #body 有 8 个子元素，
+ * 正好踩到。12 条上限写在注释里，超出就按最后一档同批落位。 */
+.stagger > *:nth-child(1) { --i: 0; }
+.stagger > *:nth-child(2) { --i: 1; }
+.stagger > *:nth-child(3) { --i: 2; }
+.stagger > *:nth-child(4) { --i: 3; }
+.stagger > *:nth-child(5) { --i: 4; }
+.stagger > *:nth-child(6) { --i: 5; }
+.stagger > *:nth-child(7) { --i: 6; }
+.stagger > *:nth-child(8) { --i: 7; }
+.stagger > *:nth-child(9) { --i: 8; }
+.stagger > *:nth-child(10) { --i: 9; }
+.stagger > *:nth-child(11) { --i: 10; }
+.stagger > *:nth-child(n + 12) { --i: 10; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stagger > * { animation-duration: .01ms; }
+  @keyframes enter-card { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes enter-sheet { from { opacity: 0; } to { opacity: 1; } }
+}
+

@@ -1,0 +1,3 @@
+[submodule "docs-repo"]
+	path = docs-repo
+	url = https://gitee.com/namelessRic/dsh_mobile-docs.git

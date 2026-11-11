@@ -1,0 +1,17 @@
+# ~/.config/systemd/user/dsh-forwarder-client.service (template)
+# In-house side: replaces frpc.service AND frpc-gateway-8326.service.
+# <REPO> is substituted by deploy-forwarder.sh at install time.
+[Unit]
+Description=dsh forwarder client (replaces frpc)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=<REPO>
+ExecStart=<REPO>/dsh-forwarder-client --config ~/.config/dsh-forwarder/client.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

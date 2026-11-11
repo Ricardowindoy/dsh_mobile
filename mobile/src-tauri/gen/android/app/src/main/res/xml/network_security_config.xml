@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  验证用 NSC：把 dsh-mobile 私有 CA 作为额外信任锚。
+  刻意只改"信任锚"这一个变量（cleartext 保持 true，与现网行为一致），
+  以便把"WebView 是否采纳 @raw 内联锚点"这个问题单独隔离出来。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="@raw/dsh_relay_ca" />
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

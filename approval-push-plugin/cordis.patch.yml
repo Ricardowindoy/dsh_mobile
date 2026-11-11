@@ -1,0 +1,19 @@
+# dsh-approval-push —— 插件自带挂载行（与 remote-access 同一约定：
+# package.json 的 dsh.bundle.patch 指向本文件，profile 不需要另改 cordis.patch.yml）。
+#
+# 语义（与 index.js 一一对应）：
+#   claimApprovals=true  有手机在线订阅才认领审批；没手机 → next()，桌面照常
+#   askTimeoutMs=110000  认领后无人应答 → 不返回允许 → approval 服务归一为拒绝
+#   caFile               IP 入口用私有 CA（域名入口可留空走公共链）
+#   accessTokenFile      管理凭据，只走 header，不进 QR/不进手机
+- insert:
+    - id: dsh-approval-push
+      name: '@local/dsh-approval-push'
+      config:
+        relayUrl: 'https://relay.example.com:24000'
+        accessTokenFile: /path/to/relay-access-token
+        caFile: /path/to/dsh-relay-ca.crt
+        deviceId: ''
+        claimApprovals: true
+        askTimeoutMs: 110000
+        pollWaitSeconds: 25

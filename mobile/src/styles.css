@@ -1,0 +1,941 @@
+/* ============================================================================
+ * dsh mobile — 连接页样式（apple 设计语言）
+ *
+ * 令牌取自 dsh-ui-designer 内置风格 `apple`（上游 emilkowalski/skills 的
+ * apple-design 技能，MIT，快照 f1090be）。浅色一套是上游原文数值；深色一套
+ * 按 Apple 系统深色调色板补齐（上游没给）。令牌名保留 --set- 前缀：便于与
+ * styles/apple.css 逐值对账。
+ *
+ * 取向（上游硬规矩，不是本仓库的建议）：
+ *   · 字距随字号变——大标题负字距、正文近 0、小字略正；行高反向。
+ *   · 8pt 基准：控件 8 / 卡片 12 / 面板 18；层级靠分层表面 + 柔和投影，不靠描边堆。
+ *   · chrome 用半透明材质，内容从下面滚过去；浅色半透明绝不叠在浅色半透明上。
+ *   · 反馈在 pointerdown 就出现（.is-pressed 由 main.js 挂，:active 只是兜底）。
+ *   · 动效只碰 transform / opacity；减弱动态时把位移换成短淡入，不是关掉反馈。
+ *   · 弹簧参数里只有 response（0.4s / 0.3s，上游原文）在 CSS 有用法；
+ *     damping 1.0/0.8 需要真弹簧运行时（SwiftUI / motion 库）才消费得动，
+ *     故本页不收录 damping 令牌——留着一个没有消费者的数值等于撒谎。
+ *     曲线用上游给的 ease-out / ease-sheet 两条近似，不自造。
+ *   · 上游没有给 CSS 落地用的兼容基线，这里按 Android WebView 保守取值：
+ *     不用 color-mix()（Chrome 111+）、不用 corner-shape（Chrome 139+）。
+ *   · 令牌取舍（与 styles/apple.css 对账时缺这几个是刻意的，不是漏抄）：
+ *     --set-warn 仍无消费者（F3 的 warn 态若落地要先把官方 #ffd60a 引回来，
+ *     并按 ink 算法算文字档）；--set-font-mono / --set-ease-in-out 本页无落点；
+ *     --set-text-3 不直接收录，placeholder 走派生档 --set-placeholder
+ *     （浅=官方 text-3 原值，深=text-3/text-2 中点 #88888d，见下）。
+ *
+ * 版式：iOS 设置页的 inset-grouped 语言 —— 大标题 / 分组卡片 / 行内标签 /
+ *       贴底材质栏。三段式骨架不变（顶栏 / 主区居中 / 贴底），因为它同时
+ *       解决软键盘弹起与长屏空白的真实问题，见 .screen-stack 注释。
+ *
+ * 安全区：状态栏 / 刘海 / 软键盘留白仍由原生 MainActivity 的 decorView
+ *   padding 处理（WebView 内 env(safe-area-inset-*) 恒为 0，写了也没用）；
+ *   画布基色必须与 decorView 的 @color/canvas 同值，否则条带有色差。
+ * ========================================================================== */
+
+:root {
+  /* 让原生表单控件 / 滚动条跟随主题；双主题都声明，切换由系统决定 */
+  color-scheme: light dark;
+
+  /* ---- 画布与表面：Apple 的分组灰底 + 纯白卡片 ---- */
+  --set-bg: #f5f5f7;
+  --set-surface: #ffffff;
+  --set-surface-2: #fafafc;
+  --set-line: rgba(0, 0, 0, .08);
+
+  /* ---- 文字：label 灰阶（近黑而非纯黑） ----
+   * 上游有第三级灰 --set-text-3(#86868b)，但本页它的候选落点（字段说明、
+   * 「可选」标签）都是 11–12px 小字，压在白卡上实测 3.3–3.6:1，不过 AA 的
+   * 4.5:1。按上游"文本要挣到自己的位置"，宁可少一级灰阶也不留不合格的小字，
+   * 故此处不收录 text-3；需要更弱时先把对比拉够再用。 */
+  --set-text: #1d1d1f;
+  --set-text-2: #6e6e73;
+  /* placeholder 是提示而非内容，允许低于 AA，但不能低到读不出：
+   * #aeaeb2 压在 #fafafc 上实测 2.1:1，形同没写；#8e8e93 到 3.2:1。 */
+  --set-placeholder: #8e8e93;
+
+  /* ---- 品牌与语义：systemBlue 的可读版本；白字压 #0071e3 达 AA ---- */
+  --set-brand: #0071e3;
+  --set-brand-on: #ffffff;
+  --set-brand-ink: #0066cc;      /* 文字动作略深一档，压在灰底上更稳 */
+  /* 实心控件的底色单独一档：主按钮 17px/600 按 WCAG 不算"大字"（阈值
+   * 24px 或 18.66px+bold），需要 4.5:1。上游 #0071e3 实测 4.70:1 刚好过线，
+   * 保留；深色档另见下面 --set-brand-solid 覆盖。 */
+  --set-brand-solid: var(--set-brand);
+  --set-ring: rgba(0, 113, 227, .22);
+  --set-ok: #1a8f4a;
+  /* ink = "语义色当文字用"的派生档：官方值压白卡 4.14 / 压画布 3.80，不达 AA
+     的 4.5；沿 RGB 等比压暗到两落点都过线（算法同设计稿 gen-tokens.mjs）。
+     文字走 ink（自检通过/推送成功那两行 13px 小字），图形（点/描边）用官方值。 */
+  --set-ok-ink: #178143;
+  --set-ok-line: rgba(26, 143, 74, .3);   /* 胶囊控件描边档（30%，同 gen-tokens） */
+  --set-warn: #b25000;
+  --set-warn-ink: #b25000;    /* 官方值压白卡 4.88，ink 即原值 */
+  --set-warn-bg: rgba(178, 80, 0, .04);
+  --set-warn-line: rgba(178, 80, 0, .3);  /* 胶囊控件描边档：统一 30%（原 .24） */
+  --set-brand-ink: #0066cc;
+  --set-danger: #d70015;
+  --set-danger-ink: #d70015;   /* 官方值压白卡 5.38，ink 即原值 */
+  --set-danger-bg: rgba(215, 0, 21, .05);
+  --set-danger-line: rgba(215, 0, 21, .3); /* 胶囊控件描边档：统一 30%（原 .22） */
+
+  /* ---- 形状：8pt 基准（控件 8 / 卡片 12 / 面板 18） ---- */
+  --set-radius: 12px;
+  --set-radius-sm: 8px;
+  --set-radius-panel: 18px;
+  --set-radius-pill: 999px;
+
+  /* ---- 排版：系统字体，字距随字号变 ---- */
+  --set-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+              "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --set-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                       "Helvetica Neue", "PingFang SC", "Microsoft YaHei",
+                       system-ui, sans-serif;
+
+  /* ---- 分层：柔和双层，不靠重描边 ---- */
+  --set-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 8px 24px rgba(0, 0, 0, .08);
+  --set-shadow-lift: 0 2px 6px rgba(0, 0, 0, .06), 0 18px 40px -20px rgba(0, 0, 0, .18);
+
+  /* ---- 动效：弹簧参数是上游原文；曲线是 web 侧近似 ---- */
+  --set-spring-response: .4s;
+  --set-spring-response-sheet: .3s;
+  --set-ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --set-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --set-dur-press: 120ms;
+  --set-dur-fast: 160ms;
+  --set-dur-panel: 400ms;
+  --set-press-scale: .97;
+  --set-enter-scale: .96;
+  --set-stagger: 50ms;
+
+  /* ---- 材质：半透明 chrome + 背景模糊（20px / 180% 按 Apple 常见值近似） ---- */
+  --set-material-bar: rgba(255, 255, 255, .72);
+  --set-material-blur: 20px;
+  --set-material-saturate: 180%;
+  --set-material-edge: rgba(0, 0, 0, .08);
+
+  /* ---- 进度环：轨道色（不用 color-mix，见文件头兼容基线） ---- */
+  --set-spinner-track: rgba(0, 113, 227, .2);
+
+  /* 命中区：触屏 44px（控件视觉尺寸可以小，命中区不行） */
+  --set-tap: 44px;
+
+  font-family: var(--set-font);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ---- 深色：官方 apple-night palette（dsh-ui-designer/styles/palettes.json）----
+   2026-11-06 起逐值取自官方夜间档，替换此前自创的深色数值（#000/#2c2c2e/#0a84ff…）。
+   决定性差异：官方 brand 组合（#3d9dff 底 + #041e33 字）本身 6.03:1 达 AA，
+   不再需要自造的 --set-brand-solid:#0060df 补救档（该令牌已删，实心按钮直接
+   用 brand/brand-on）。条带初值同值见 res/values-night/colors.xml。 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --set-bg: #0d0d0f;
+    --set-surface: #1c1c1e;
+    --set-surface-2: #26262a;
+    --set-line: #3a3a3e;
+
+    --set-text: #f5f5f7;
+    --set-text-2: #a1a1a6;
+    /* placeholder 走派生档：官方 text-3(#6e6e73) 压在 #26262a 上只有 2.97，
+       不达"提示 ≥3"的自设线；取官方 text-3 与 text-2 的逐通道中点 → 4.27。 */
+    --set-placeholder: #88888d;
+
+    --set-brand: #3d9dff;
+    --set-brand-on: #041e33;
+    --set-brand-ink: #3d9dff;   /* 深色下官方 brand 压卡片 6.05:1，ink 即原值 */
+    --set-brand-solid: #3d9dff; /* 实心按钮 = 官方组合，brand-on 做文字 */
+    --set-ring: rgba(61, 157, 255, .26);
+    --set-ok: #30d158;
+    --set-ok-ink: #30d158;      /* 官方值深色下 8.42:1，ink 即原值 */
+    --set-ok-line: rgba(48, 209, 88, .3);  /* 胶囊控件描边档（30%，同 gen-tokens） */
+    --set-warn: #ffd60a;
+    --set-warn-ink: #ffd60a;
+    --set-warn-bg: rgba(255, 214, 10, .10);
+    --set-warn-line: rgba(255, 214, 10, .3); /* 胶囊控件描边档：统一 30%（原 .32） */
+    --set-danger: #ff453a;
+    --set-danger-ink: #ff453a;
+    /* 染底压卡片 4.61 / 压画布 5.34（两落点都 ≥4.5），alpha 与上游色相分离。 */
+    --set-danger-bg: rgba(255, 69, 58, .08);
+    --set-danger-line: rgba(255, 69, 58, .3); /* 胶囊控件描边档（原 .30 不变） */
+
+    --set-shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .5);
+    --set-shadow-lift: 0 2px 8px rgba(0, 0, 0, .5), 0 20px 44px -20px rgba(0, 0, 0, .7);
+
+    /* 材质条 = 官方 surface 同 RGB + .72（apple.css 浅色档同一派生式） */
+    --set-material-bar: rgba(28, 28, 30, .72);
+    --set-material-edge: rgba(255, 255, 255, .1);
+
+    --set-spinner-track: rgba(61, 157, 255, .28);
+  }
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+/* 关键：hidden 必须压过下面的 display:flex。
+   #setup / #status 都是 flex 容器，缺了这条 `hidden` 形同虚设 —— 症状是
+   设置页底部同时挂着一份"正在连接 dsh…"动画。 */
+[hidden] { display: none !important; }
+
+html { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--set-bg);
+  color: var(--set-text);
+  /* 正文 15px/1.47、字距近 0：上游排版基线 */
+  font: 15px/1.47 var(--set-font);
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 三段式骨架：#setup / #status 都是纵向 flex，主区吸收剩余高度。
+   水平内缩交给各段自己处理，材质栏才能整幅出血（内容栏另有 max-width）。 */
+main {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* ---------- 顶栏：半透明材质，内容从下面滚过去 ---------- */
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 16px;
+  background: var(--set-material-bar);
+  -webkit-backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  border-bottom: 1px solid var(--set-material-edge);
+}
+
+.logo-badge {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--set-radius-sm);
+  background: var(--set-surface-2);
+  box-shadow: inset 0 0 0 1px var(--set-line);
+}
+
+.logo { width: 20px; height: 20px; display: block; }
+
+.app-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--set-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-version {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  font-size: 12px;
+  /* 小字略正字距 + 等宽数字：版本串不会因数字宽度抖动 */
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--set-text-2);
+  border-radius: var(--set-radius-pill);
+  background: var(--set-surface-2);
+  box-shadow: inset 0 0 0 1px var(--set-line);
+}
+
+/* ---------- 主区：内容在剩余高度里居中 ---------- */
+.screen-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 4px 16px 12px;
+}
+
+.screen-stack {
+  width: 100%;
+  margin: auto 0;   /* 上下吸收剩余空间；空间不够时自动塌成 0（键盘弹起不裁顶） */
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* iOS 大标题：固定 24px，不随屏宽缩放（密度 A9：标题区不许吃掉一屏的 40%）。
+   曾用 clamp(26px,7.6vw,34px) —— 390 屏取到 ≈29.6px，加上副标题与卡标题/卡说明
+   四级文字堆叠，一屏只看得到一个表单框。矮屏档另收 22px。 */
+.large-title {
+  margin: 0;
+  font-family: var(--set-font-display);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.14;
+  letter-spacing: -0.022em;
+}
+
+.page-sub {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: .006em;   /* 小字略正 */
+  color: var(--set-text-2);
+}
+
+/* ---------- inset-grouped 分组（表单壳）：不包"浮起的砖" ----------
+   两个输入框不值得一块 16px 内距 + 投影的卡片；分组提供容器与行缝，
+   层级靠 fill，不靠第二层投影。更新卡仍用 .card（它真的是一块面板）。 */
+.group {
+  border-radius: var(--set-radius);
+  background: var(--set-surface);
+  box-shadow: var(--set-shadow);
+  overflow: hidden;
+  min-width: 0;
+  animation: enter-card var(--set-spring-response) var(--set-ease-out) both;
+}
+
+/* 组外小标题（设计 01：「手动连接（救急）」这类分区标题） */
+.group-h {
+  margin: 20px 0 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--set-text-2);
+}
+.group-h:first-child { margin-top: 0; }
+
+/* 扫码区：不是卡片 —— 按钮直接落在页面上，说明在按钮下方（设计 01 ①） */
+.scan { display: flex; flex-direction: column; min-width: 0; }
+.scan-note { margin: 8px 0 0; }
+
+/* 相册识别 / 粘贴配对：主扫码按钮下方的两个次级动作，等宽并排。
+   复用 .btn-secondary 胶囊 + 带图标变体（与主 CTA 同一套图标对齐规则）。 */
+.scan-alt {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.scan-alt .btn-secondary { flex: 1; min-width: 0; }
+.btn-secondary--with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-secondary--with-icon svg { flex: 0 0 auto; }
+
+/* ---------- 相机扫码覆盖层（getUserMedia <video>，全屏） ----------
+   fixed inset:0 覆盖 WebView 视口；video 用 object-fit:cover 铺满，
+   中间方框只是视觉引导（jsQR 解码的是整帧，不裁切）。深色蒙层用
+   box-shadow: 0 0 0 100vmax 实现，不额外加一个全屏半透明层。 */
+.cam-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: #000;
+  overflow: hidden;
+}
+.cam-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cam-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(62vw, 260px);
+  aspect-ratio: 1 / 1;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, .9);
+  border-radius: 18px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+  pointer-events: none;
+}
+.cam-hint {
+  position: absolute;
+  top: calc(22px + env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  margin: 0;
+  text-align: center;
+  font-size: 14px;
+  letter-spacing: .01em;
+  color: rgba(255, 255, 255, .92);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+}
+.cam-cancel {
+  position: absolute;
+  bottom: calc(26px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  min-height: var(--set-tap);
+  padding: 12px 30px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, .18);
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: var(--set-radius-pill);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.cam-cancel:active { transform: translateX(-50%) scale(.97); }
+
+/* 组脚注：一行 12px 说明挂在组下（原来每个字段下面各挂一句 .field-help） */
+.group-foot {
+  margin: 6px 0 0;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: .01em;
+  color: var(--set-text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 面板卡片（更新卡用；表单已改 inset-grouped 分组） ---------- */
+.card {
+  padding: 16px;
+  border-radius: var(--set-radius);
+  background: var(--set-surface);
+  box-shadow: var(--set-shadow);
+  animation: enter-card var(--set-spring-response) var(--set-ease-out) both;
+}
+
+/* ---------- 字段：同行（标签左、输入右）—— 密度 A8 的主项 ----------
+   竖排（label 上 / input 下）每个字段吃掉标签行 + 输入行 + 间距 ≈76px，
+   两个字段就占掉 390×844 屏的近三分之一。同行后每个字段一行。
+   输入框去掉自身底色与描边（分组已是容器），只留右对齐的文字 ——
+   视觉上是"一行里的一个值"，不是"一个输入控件"。 */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--set-tap);
+  padding: 6px 14px;
+  min-width: 0;
+}
+
+.field-row + .field-row { box-shadow: inset 0 1px 0 var(--set-line); }
+
+.field-row-label {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--set-text);
+  white-space: nowrap;
+}
+
+.field-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: .02em;
+  /* text-2 而非更浅的一档：11px 小字压在 surface 上必须够 4.5:1 */
+  color: var(--set-text-2);
+  border-radius: var(--set-radius-sm);
+  background: var(--set-surface-2);
+}
+
+.field-row-control {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.field-row-control input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  /* 16px：低于此值移动端会因"自动放大输入"而整页缩放 */
+  font-size: 16px;
+  line-height: 22px;
+  letter-spacing: -0.003em;
+  padding: 6px 0;
+  text-align: right;
+  color: var(--set-text-2);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: color var(--set-dur-fast) var(--set-ease-out);
+}
+
+.field-row-control input::placeholder { color: var(--set-placeholder); }
+
+.field-row-control input:focus {
+  color: var(--set-text);
+}
+
+/* token 行的显隐按钮：视觉 32px（44px 会把 44px 的行撑到 56px），
+   命中区用 ::before 补回 44×44 —— 视觉小、命中不缩水。 */
+.field-has-action input { padding-right: 40px; }
+
+.field-action {
+  position: relative;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin: 0;
+  color: var(--set-text-2);
+  border: 0;
+  border-radius: var(--set-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              color var(--set-dur-press) var(--set-ease-out),
+              background var(--set-dur-press) var(--set-ease-out);
+}
+
+.field-action::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.field-action:active,
+.field-action.is-pressed {
+  color: var(--set-text);
+  background: var(--set-surface-2);
+  transform: scale(var(--set-press-scale));
+}
+
+/* ---------- 错误提示：贴在触发动作上方，读起来属于这次点击 ---------- */
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--set-danger);
+  border-radius: var(--set-radius);
+  background: var(--set-danger-bg);
+  box-shadow: inset 0 0 0 1px var(--set-danger-line);
+  animation: enter-panel var(--set-dur-panel) var(--set-ease-out) both;
+}
+
+.error svg { flex: 0 0 auto; margin-top: 1px; }
+.error + .btn-primary { margin-top: 12px; }
+
+/* ---------- 按钮：按压即时反馈 + 缩放，不画渐变重投影 ---------- */
+.btn-primary {
+  width: 100%;
+  margin: 16px 0 0;
+  padding: 14px 18px;
+  min-height: var(--set-tap);
+  font: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--set-brand-on);
+  border: 0;
+  border-radius: var(--set-radius-pill);
+  background: var(--set-brand-solid);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              opacity var(--set-dur-press) var(--set-ease-out);
+}
+
+
+/* 带图标的主按钮（连接 dsh / 下载更新）：图标 + 文字并排居中 ——
+   用户要求动作按钮图形化，主 CTA 保留文字但配上图标，不再是纯文字按钮。 */
+.btn-primary--with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-primary--with-icon svg { flex: 0 0 auto; }
+
+/* 更新卡主按钮：图标随 data-state 切换（download/install/retry）。
+   同一按钮上叠三枚图标，同一时刻只显示一枚（display 切换，不动画尺寸）。 */
+.update-download .ico { display: none; }
+.update-download[data-state="download"] .ico--download,
+.update-download[data-state="install"] .ico--install,
+.update-download[data-state="retry"] .ico--retry { display: block; }
+.btn-primary:active,
+.btn-primary.is-pressed { transform: scale(var(--set-press-scale)); }
+
+.btn-primary[disabled] { opacity: .45; cursor: default; transform: none; }
+
+.btn-secondary {
+  flex: 1;
+  min-height: var(--set-tap);
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.003em;
+  color: var(--set-text);
+  border: 0;
+  border-radius: var(--set-radius-pill);
+  background: var(--set-surface-2);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              opacity var(--set-dur-press) var(--set-ease-out);
+}
+
+.btn-secondary:active,
+.btn-secondary.is-pressed { transform: scale(var(--set-press-scale)); }
+
+/* 图形化动作按钮（用户 2026-11-07 定：动作一律图形，不用文字按钮）。
+ * 视觉 44×44（触屏标准、图标 18），品牌色；语义放 aria-label/title，
+ * 图标 aria-hidden —— 读屏读按钮名，不读图标。
+ * 旧的 .btn-ghost 文字动作已按此要求删除（连接自检 / 推送日志 两处）。
+ * 主 CTA「连接 dsh」仍是带文字的实心按钮：它是动作主体，图标反而不如文字直接。 */
+.icon-btn {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: var(--set-tap);
+  height: var(--set-tap);
+  padding: 0;
+  color: var(--set-brand-ink);
+  border: 0;
+  border-radius: var(--set-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--set-dur-press) var(--set-ease-out),
+              opacity var(--set-dur-press) var(--set-ease-out),
+              background var(--set-dur-press) var(--set-ease-out);
+}
+
+.icon-btn svg { display: block; }
+
+.icon-btn:active,
+.icon-btn.is-pressed { transform: scale(var(--set-press-scale)); }
+
+.icon-btn[disabled] { opacity: .45; cursor: default; transform: none; }
+
+/* busy：图标旋转 = 正在工作（只碰 transform），语义同时由状态文字承载 */
+.icon-btn--busy svg { animation: spin .9s linear infinite; }
+
+/* 自检行：动作与结果同一行基线，结果不另起一块灰底 */
+.diag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px 10px;
+  margin-top: 4px;
+  padding: 0;                  /* 图标左缘 = 字段文字左缘（44 宽按钮内 18 图标居中 → 左内距 13 ≈ 14） */
+  min-height: var(--set-tap);
+}
+
+.push-log-status {
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: .01em;
+  color: var(--set-text-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.push-log-status[data-tone="ok"] { color: var(--set-ok-ink); }
+.push-log-status[data-tone="bad"] { color: var(--set-danger); }
+
+/* 连接自检结果用胶囊（2026-11-08 控件规范 .wb-badge）。
+   骨架 = 用户给的 .wb-badge 控件：色点 currentColor、12px/500、--set-radius-sm
+   圆角、3px 10px、组内 flex wrap 8px。三项事实各一枚：Relay 延迟 / token 要求 /
+   设备在线。颜色只是冗余编码，文字本身承载语义；失败时同一容器里只放一枚
+   danger 胶囊。染底走浅档派生令牌（不用 color-mix：build.target=chrome100）。 */
+.status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--set-radius-sm);
+  background: var(--set-surface-2);
+  color: var(--set-text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: .01em;
+  border: 1px solid var(--set-line);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.status-pill i {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.status-pill--ok { color: var(--set-ok-ink); background: var(--set-surface-2); border-color: var(--set-ok-line); }
+.status-pill--warn { color: var(--set-warn-ink); background: var(--set-warn-bg); border-color: var(--set-warn-line); }
+.status-pill--bad { color: var(--set-danger-ink); background: var(--set-danger-bg); border-color: var(--set-danger-line); }
+
+/* ---------- 更新卡片：面板层级（18px），从底部升起，语义是 sheet ----------
+   入场比首卡晚一档（stagger 50ms）：主卡在、更新卡后现，读起来是"补了一条事实"。 */
+.update-card {
+  padding: 18px;
+  border-radius: var(--set-radius-panel);
+  background: var(--set-surface);
+  box-shadow: var(--set-shadow-lift);
+  animation: enter-sheet var(--set-spring-response-sheet) var(--set-ease-sheet) both;
+  animation-delay: var(--set-stagger);
+}
+
+.update-title {
+  margin: 0 0 4px;
+  font-family: var(--set-font-display);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.016em;
+}
+
+.update-meta {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--set-text-2);
+}
+
+.update-note {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--set-text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.update-actions { display: flex; gap: 10px; margin-top: 14px; }
+.update-actions .icon-btn { width: auto; min-width: var(--set-tap); height: auto; min-height: var(--set-tap); }
+.update-actions .btn-primary { margin-top: 0; flex: 1; }
+
+/* ---------- 下载进度条：只有 transform 在动 ----------
+   定态 = scaleX(0..1)；不定态（服务器没给 Content-Length）= 条纹平移。
+   减弱动态时条纹停成 50% 常亮（见下方 media query），不闪也不装死。 */
+.update-progress {
+  height: 4px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: var(--set-surface-2);
+  box-shadow: inset 0 0 0 1px var(--set-line);
+  overflow: hidden;
+}
+.update-progress-bar {
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--set-brand);
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform .25s var(--set-ease-out);
+}
+.update-progress.indeterminate .update-progress-bar {
+  transform: scaleX(.25);
+  animation: update-progress-slide 1.4s linear infinite;
+}
+.update-progress-count {
+  margin: 6px 0 0;
+  font-size: 12px;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--set-text-2);
+}
+@keyframes update-progress-slide {
+  /* 2px 条纹、8px 周期；只动 background-position，宽度保持 25% */
+  from { background-position: 0 0; }
+  to { background-position: 8px 0; }
+}
+.update-progress.indeterminate .update-progress-bar {
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--set-brand) 0 2px,
+    transparent 2px 8px
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-progress.indeterminate .update-progress-bar {
+    animation: none;
+    background-image: none;
+    transform: scaleX(.25);
+  }
+  .update-progress-bar { transition-duration: .01ms; }
+}
+
+/* ---------- 贴底材质栏：诊断入口沉在这里，不跟主区抢注意力 ---------- */
+.bottom-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-height: 52px;
+  padding: 8px 16px;
+  background: var(--set-material-bar);
+  -webkit-backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  backdrop-filter: blur(var(--set-material-blur)) saturate(var(--set-material-saturate));
+  border-top: 1px solid var(--set-material-edge);
+}
+
+/* ---------- 连接中 ---------- */
+#status {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.status-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 2.5px solid var(--set-spinner-track);
+  border-top-color: var(--set-brand);
+  border-radius: 50%;
+  animation: spin .9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.status-text {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: -0.003em;
+  color: var(--set-text-2);
+}
+
+/* ---------- 入场：只碰 transform / opacity ---------- */
+@keyframes enter-card {
+  from { opacity: 0; transform: scale(var(--set-enter-scale)) translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes enter-sheet {
+  from { opacity: 0; transform: translateY(16px) scale(var(--set-enter-scale)); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes enter-panel {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* hover 只在真有悬停能力的设备上出现（触屏上它会把样式钉死在悬停态） */
+@media (hover: hover) and (pointer: fine) {
+  .btn-primary:hover,
+  .btn-secondary:hover,
+  .icon-btn:hover { opacity: .82; }
+}
+
+/* 焦点可见性：键盘路径可走，鼠标路径不打扰 */
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.icon-btn:focus-visible,
+.field-action:focus-visible {
+  outline: 2px solid var(--set-brand);
+  outline-offset: 2px;
+}
+
+/* 减弱动态 ≠ 关掉反馈：位移与弹簧换成短淡入，按压缩放取消，颜色反馈保留。
+   注意必须用类级选择器：`*` 的特异性(0)打不过 .btn-primary/.card(10) 的
+   animation/transition 简写，实测会"以为改了、其实没改"。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms;
+    animation-duration: .01ms;
+    animation-iteration-count: 1;
+  }
+  .btn-primary, .btn-secondary, .icon-btn, .field-action,
+  .field input { transition-duration: .01ms; }
+  .card, .update-card, .error { animation-duration: .01ms; }
+  .btn-primary:active, .btn-secondary:active, .icon-btn:active,
+  .field-action:active, .btn-primary.is-pressed, .btn-secondary.is-pressed,
+  .icon-btn.is-pressed, .field-action.is-pressed { transform: none; }
+  /* 入场改成纯淡入：位移归零，但保留"内容挣到自己位置"的出现感 */
+  @keyframes enter-card { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes enter-sheet { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes enter-panel { from { opacity: 0; } to { opacity: 1; } }
+  /* 连接中仍需一个可观测的进度事实，只是放慢（不能跟着 .01ms 一起停掉） */
+  .spinner { animation: spin 1.6s linear infinite; }
+}
+
+/* 减弱透明度：材质变实，层级改用边框表达 */
+@media (prefers-reduced-transparency: reduce) {
+  .app-bar, .bottom-bar {
+    background: var(--set-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* 高对比：材质变实 + 清晰边框，chrome 与内容分层不靠模糊 */
+@media (prefers-contrast: more) {
+  .app-bar, .bottom-bar { background: var(--set-surface); border-color: var(--set-text); }
+  .card, .update-card { box-shadow: inset 0 0 0 1px var(--set-text); }
+}
+
+/* ---------- 矮屏（软键盘弹起 / 小屏机）：收紧留白，优先保证字段可见 ---------- */
+@media (max-height: 640px) {
+  .screen-main { padding-top: 0; }
+  .large-title { font-size: 22px; }
+  .page-sub { display: none; }        /* 键盘弹起时说明文字让位给输入 */
+  .group-foot { display: none; }      /* 脚注也让位：400px 高要装下标题+两字段+按钮 */
+  .screen-stack { margin-top: 12px; }
+}

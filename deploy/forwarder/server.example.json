@@ -1,0 +1,33 @@
+{
+  "relayTLS": {
+    "listen": "0.0.0.0:24000",
+    "certFile": "/opt/dsh-forwarder/tls/dsh-relay-leaf.crt",
+    "keyFile": "/opt/dsh-forwarder/tls/dsh-relay-leaf.key"
+  },
+  "publicTLS": {
+    "listen": "0.0.0.0:24010",
+    "certFile": "/etc/letsencrypt/live/<your-domain>/fullchain.pem",
+    "keyFile": "/etc/letsencrypt/live/<your-domain>/privkey.pem",
+    "stripRefererPaths": ["/api/bili-duty"]
+  },
+  "relay": {
+    "pairingsFile": "/opt/dsh-forwarder/pairings.json",
+    "accessTokenFile": "/opt/dsh-forwarder/access-token",
+    "updatesDir": "/opt/dsh-forwarder/updates",
+    "logFile": "/opt/dsh-forwarder/logs/forwarder.log",
+    "heartbeat": "30s",
+    "maxStreams": 256,
+    "streamBuffer": 262144,
+    "idleTimeout": "5m"
+  },
+  "portForward": {
+    "controlListen": "0.0.0.0:7782",
+    "token": "REPLACE_WITH_A_NEW_HIGH_ENTROPY_TOKEN",
+    "ports": [
+      { "name": "hindsight-api", "remotePort": 18888 },
+      { "name": "gateway-8326", "remotePort": 18326 }
+    ],
+    "connectDeadline": "10s",
+    "reloadInterval": "10m"
+  }
+}

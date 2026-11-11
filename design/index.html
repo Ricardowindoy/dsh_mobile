@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>index · 总览 · dsh_mobile Apple 三端</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./base.css">
+<style>
+/* 本页专用：主张三句 / 索引卡 / 令牌对照表 --------------------------------- */
+.wrap { max-width: 1080px; margin: 0 auto; padding: 28px 24px 48px; }
+.lede { margin: 10px 0 0; max-width: 62ch; color: var(--set-text-2); }
+.claims { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 0; }
+@media (max-width: 900px) { .claims { grid-template-columns: minmax(0, 1fr); } }
+.claim .no { font: 600 11px/16px var(--set-font-mono); letter-spacing: .1em; color: var(--set-brand-ink); }
+.claim h3 { margin: 6px 0 6px; font-size: 15px; line-height: 22px; font-weight: 600; letter-spacing: -.016em; }
+.claim p { margin: 0; font-size: 13px; line-height: 21px; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.index { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 18px 0 0; }
+.index a { display: block; color: inherit; text-decoration: none; }
+.index a:hover .card__title { color: var(--set-brand-ink); }
+.index .meta { margin: 8px 0 0; font-size: 12px; letter-spacing: .01em; color: var(--set-text-2); }
+h2.sec { font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--set-text-2); margin: 34px 0 0; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--set-line); min-width: 0; }
+th { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); font-weight: 600; }
+td code { font-family: var(--set-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 7px; box-shadow: inset 0 0 0 1px var(--set-line); }
+.pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.note { margin: 14px 0 0; font-size: 12px; line-height: 1.6; color: var(--set-text-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1 class="t-large-title">dsh_mobile · Apple 三端</h1>
+  <p class="lede">手机 App 连接页、桌面 App 窗口、DSH 设置页的「远程访问」分区。三处共用同一份令牌与同一套组件层：落地时各改排版，不改数值。</p>
+
+  <div class="claims">
+    <div class="card claim enter">
+      <div class="no">01</div>
+      <h3>数值只有一个来源</h3>
+      <p>浅色逐字节取自插件 <code>styles/apple.css</code>，深色逐值取自 <code>palettes.json#apple-night</code>。由 <code>tools/gen-tokens.mjs</code> 生成，任何人手抄都会漂移，包括我自己第一版。</p>
+    </div>
+    <div class="card claim enter enter--2">
+      <div class="no">02</div>
+      <h3>深色是 palette，不是发挥</h3>
+      <p>第一版曾自创深色（brand <code>#0a84ff</code>）。官方夜间档是 <code>#3d9dff</code> 配 <code>brand-on:#041e33</code> 才过 AA。规范把深色定为风格之外独立一层，本套已换回官方值。</p>
+    </div>
+    <div class="card claim enter enter--2">
+      <div class="no">03</div>
+      <h3>密度是结构决定的</h3>
+      <p>竖排字段（label 上 / input 下）每个字段吃掉 ≈76px，两个字段就占掉 390×844 屏的近三分之一；再加上「29px 大标题 + 副标题 + 17px 卡标题 + 13px 卡说明」四级堆叠，一屏只看得到一个表单框。<strong>这一版改成：字段同行（每字段一行）、标题固定 24px、说明并入组脚注、同类项合并成一行摘要</strong> —— iOS 设置页的骨架。合并不是隐藏：unit 名与状态都在，只是收在默认收起的 <code>&lt;details&gt;</code> 里。</p>
+    </div>
+    <div class="card claim enter enter--2">
+      <div class="no">04</div>
+      <h3>闸门会失败</h3>
+      <p>每条规则都做过变异检验：注入裸色值、动尺寸属性、触屏命中区不足、未声明令牌、图形令牌当文字色，全部报红；合规项不误报。规则条数以 <code>check.mjs</code> 自己打印的为准 —— 文档里不写数字，写了就会漂。「写着规范」不等于「成立」。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">页面索引</h2>
+  <div class="index">
+    <a class="card" href="./01-mobile-connect.html">
+      <div class="card__title">01 · 手机 App 连接页</div>
+      <div class="card__sub">三段式：材质顶栏 / inset-grouped 分组 / 贴底材质栏。<strong>字段同行</strong>（标签左、输入右），标题 24px，说明并入组脚注。含键盘弹起与错误态。<strong>0.1.19：扫码配对升为主路径</strong>（手输 token 降级救急分组），⑨ 画扫描中/陌生 host 确认/码失效三态。</div>
+      <div class="meta">390×844 · 320×568 · 390×400 · 触屏命中区 44px</div>
+    </a>
+    <a class="card" href="./02-desktop-window.html">
+      <div class="card__title">02 · 桌面 App 窗口</div>
+      <div class="card__sub">同一页的宽屏形态：内容收到 560px 居中，不拉满表单；字段同样同行（桌面档行高 34px）。桌面没有相机插件，扫码分组按真实行为隐藏（不是漏画）。</div>
+      <div class="meta">1280×800 内切 420×760 与 900×700 · 命中区 28px</div>
+    </a>
+    <a class="card" href="./03-settings-remote-access.html">
+      <div class="card__title">03 · 设置页「远程访问」分区</div>
+      <div class="card__sub">可交互原型：宿主外壳只画一次，7 个数据态由顶部的状态机切换（含入场动画、入口切换、刷新 busy）。<strong>状态值一律胶囊</strong>，刷新按钮在「状态」标题行右侧并与卡片右缘对齐；三个 unit 合并成一行摘要 + details 展开。<strong>0.1.19 新增「扫码配对手机」分区</strong>：P1–P4 四态（码活着/未生成/已过期/relay 未启用）+ 设备列表两步撤销。</div>
+      <div class="meta">桌面 1280（行 32px/控件 28px，宿主实测）+ 手机 390 移动档（导航横条/行 44px/评审折叠，宿主 767px 同式）· 现状是内联样式，落地改令牌</div>
+    </a>
+    <a class="card" href="./04-approval-push.html">
+      <div class="card__title">04 · 审批推送卡片</div>
+      <div class="card__sub">0.1.19 / WP4：手机原生通知三态（审批卡两 action / 提问卡无文本 / 已处理回执）+ 桌面说明分区。语义规则：<strong>有订阅才认领、沉默不是同意、先答先赢</strong>。</div>
+      <div class="meta">390 宽通知画布 · 浅/深并排 · action 命中区 44px · 落地是 Kotlin NotificationCompat（系统渲染为准）</div>
+    </a>
+  </div>
+
+  <h2 class="sec">令牌对照（浅色 → 深色 apple-night）</h2>
+  <div class="pairs">
+    <div class="card">
+      <div class="card__title">画布与文字</div>
+      <table>
+        <tr><th>令牌</th><th>浅 → 深</th></tr>
+        <tr><td><code>--set-bg</code></td><td><span class="swatch" style="background:var(--set-bg)"></span><code>#f5f5f7</code> → <code>#0d0d0f</code></td></tr>
+        <tr><td><code>--set-surface</code></td><td><span class="swatch" style="background:var(--set-surface)"></span><code>#ffffff</code> → <code>#1c1c1e</code></td></tr>
+        <tr><td><code>--set-surface-2</code></td><td><span class="swatch" style="background:var(--set-surface-2)"></span><code>#fafafc</code> → <code>#26262a</code></td></tr>
+        <tr><td><code>--set-text</code></td><td><span class="swatch" style="background:var(--set-text)"></span><code>#1d1d1f</code> → <code>#f5f5f7</code></td></tr>
+        <tr><td><code>--set-text-2</code></td><td><span class="swatch" style="background:var(--set-text-2)"></span><code>#6e6e73</code> → <code>#a1a1a6</code></td></tr>
+        <tr><td><code>--set-text-3</code></td><td><span class="swatch" style="background:var(--set-text-3)"></span><code>#86868b</code> → <code>#6e6e73</code></td></tr>
+      </table>
+      <p class="note"><code>--set-text-3</code> 限定给 placeholder 与弱标注；成句说明一律 <code>--set-text-2</code>（小字要够 4.5:1）。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">品牌与语义</div>
+      <table>
+        <tr><th>令牌</th><th>浅 → 深</th></tr>
+        <tr><td><code>--set-brand</code></td><td><span class="swatch" style="background:var(--set-brand)"></span><code>#0071e3</code> → <code>#3d9dff</code></td></tr>
+        <tr><td><code>--set-brand-on</code></td><td><span class="swatch" style="background:var(--set-brand-on)"></span><code>#ffffff</code> → <code>#041e33</code></td></tr>
+        <tr><td><code>--set-ok</code></td><td><span class="swatch" style="background:var(--set-ok)"></span><code>#1a8f4a</code> → <code>#30d158</code></td></tr>
+        <tr><td><code>--set-warn</code></td><td><span class="swatch" style="background:var(--set-warn)"></span><code>#b25000</code> → <code>#ffd60a</code></td></tr>
+        <tr><td><code>--set-danger</code></td><td><span class="swatch" style="background:var(--set-danger)"></span><code>#d70015</code> → <code>#ff453a</code></td></tr>
+        <tr><td><code>--set-line</code></td><td><span class="swatch" style="background:var(--set-line)"></span><code>rgba(0,0,0,.08)</code> → <code>#3a3a3e</code></td></tr>
+      </table>
+      <p class="note">深色下主按钮文字是 <code>#041e33</code>（近黑）而不是白 —— 官方 palette 就是靠这个组合过 AA。材质条官方没给，由 <code>--set-surface</code> 同 RGB + .72 派生。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">与第一版落地代码的差异</h2>
+  <div class="card">
+    <table>
+      <tr><th>项</th><th>已落地（自创）</th><th>按规范应为</th></tr>
+      <tr><td>深色画布</td><td><code>#000</code></td><td><code>#0d0d0f</code></td></tr>
+      <tr><td>深色控件底</td><td><code>#2c2c2e</code></td><td><code>#26262a</code></td></tr>
+      <tr><td>深色 brand</td><td><code>#0a84ff</code> + 自造 <code>#0060df</code></td><td><code>#3d9dff</code> + <code>brand-on:#041e33</code></td></tr>
+      <tr><td><code>--set-text-3</code></td><td>删除</td><td>恢复，限定 placeholder</td></tr>
+      <tr><td><code>--set-warn</code></td><td>删除（页面没落点）</td><td>恢复：自检「设备离线」= 网络通、链路断</td></tr>
+    </table>
+    <p class="note">逐条改法与验证方式见 <a href="./docs/落地清单.md" style="color: var(--set-brand-ink)">docs/落地清单.md</a> 的 A1–A7。</p>
+  </div>
+
+  <h2 class="sec">验收</h2>
+  <div class="card">
+    <table>
+      <tr><th>命令</th><th>作用</th></tr>
+      <tr><td><code>node design/tools/gen-tokens.mjs</code></td><td>从插件上游重新生成 tokens.css（勿手改）</td></tr>
+      <tr><td><code>node design/tools/check.mjs</code></td><td>闸门（会失败）；规则清单由脚本自己打印，汇总行取自 <code>RULES</code> 数组，不在文档里重述条数</td></tr>
+    </table>
+    <p class="note">0.1.19 工作包（扫码配对 + 审批推送）的设计面已同步：01 加扫码主路径与⑨三态、02 登记桌面隐藏语义、03 加配对分区 P1–P4、04 新页画通知卡片。真机状态栏条带与通知渲染在完成真机验证前一律标「待验证」。</p>
+  </div>
+
+</div>
+</body>
+</html>

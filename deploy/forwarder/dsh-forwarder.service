@@ -1,0 +1,24 @@
+# /etc/systemd/system/dsh-forwarder.service (template)
+# Unified server-side forwarder: relay TLS (private CA) + public TLS (LE) + port forward.
+# Replaces nginx's dsh vhost and frps. During rollout it runs ALONGSIDE them on
+# NEW ports (24010 / 7782), so the old chain stays available for rollback.
+# <FORWARDER_DIR> is substituted by deploy-forwarder.sh at install time.
+[Unit]
+Description=dsh unified forwarder (relay + TLS + port forward)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=<FORWARDER_DIR>
+ExecStart=<FORWARDER_DIR>/dsh-forwarder --config /etc/dsh-forwarder/server.json
+Restart=always
+RestartSec=3
+# The LE private key is root-only (0700 live/ directory); do not drop privileges
+# unless the cert group/permissions are adjusted first.
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

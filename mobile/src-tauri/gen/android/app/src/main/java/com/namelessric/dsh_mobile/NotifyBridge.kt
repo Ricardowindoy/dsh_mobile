@@ -1,0 +1,190 @@
+package com.namelessric.dsh_mobile
+
+import android.Manifest
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
+import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+
+/**
+ * 审批/提问通知卡片（WP4c）。
+ *
+ * 生命周期：Rust 侧 notify_start 经 JNI 调 start()（SSE 订阅在 Rust 维持，
+ * 每条消息经 onCard 推到这里）；notify_stop 调 stop()。进程被杀后无通知
+ * —— v1 不做常驻服务（电池友好），这是文档写明的已知限制。
+ *
+ * 安全：卡片只是提示；「允许一次/拒绝」action 由 Rust 用设备 token 走
+ * header POST 到 relay（nativeAnswer），Kotlin 不持有也不转发任何凭据到
+ * 别处。decision 闭集在 Rust/relay 两侧各校验一次。
+ */
+object NotifyBridge {
+  private const val TAG = "dsh-notify"
+  private const val CHANNEL_ID = "dsh-approvals"
+  private const val REQUEST_POST_NOTIFICATIONS = 1001
+  private const val ACTION_ANSWER = "com.namelessric.dsh_mobile.NOTIFY_ANSWER"
+  private const val EXTRA_ID = "id"
+  private const val EXTRA_DECISION = "decision"
+
+  private val executor = Executors.newSingleThreadExecutor()
+  private val cards = ConcurrentHashMap<String, JSONObject>()
+  @Volatile private var started = false
+  @Volatile private var appContext: Context? = null
+
+  // Rust 实现的应答发送（reqwest + 私有 CA + 设备 token header）。
+  external fun nativeAnswer(id: String, decision: String)
+
+  /** JNI 入口：Rust notify_start 调用。 */
+  @JvmStatic
+  fun start(context: Context) {
+    appContext = context.applicationContext
+    val ctx = appContext ?: return
+    // Android 13+：POST_NOTIFICATIONS 是运行时权限，manifest 声明不等于已授予。
+    // 不主动请求时 NotificationManagerCompat.notify 只会抛 SecurityException，
+    // 旧代码在 showCard 里静默降级，用户会以为「通知坏了」。这里在订阅启动时
+    // 用 Activity 请求一次；用户拒绝后仍可到系统设置里手动打开。
+    if (Build.VERSION.SDK_INT >= 33) {
+      val activity = context as? Activity
+      if (activity != null &&
+        ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        activity.runOnUiThread {
+          ActivityCompat.requestPermissions(
+            activity,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            REQUEST_POST_NOTIFICATIONS,
+          )
+        }
+      }
+    }
+    if (started) return
+    started = true
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= 26) {
+      val channel = NotificationChannel(CHANNEL_ID, "审批与提问", NotificationManager.IMPORTANCE_HIGH).apply {
+        description = "agent 等待你决定时推送；可直接允许一次或拒绝"
+        enableVibration(true)
+      }
+      nm.createNotificationChannel(channel)
+    }
+    Log.i(TAG, "started")
+  }
+
+  /** JNI 入口：Rust notify_stop 调用。撤下所有未决卡片。 */
+  @JvmStatic
+  fun stop() {
+    started = false
+    val ctx = appContext ?: return
+    val nm = NotificationManagerCompat.from(ctx)
+    for (id in cards.keys) nm.cancel(id.hashCode())
+    cards.clear()
+    Log.i(TAG, "stopped")
+  }
+
+  /** JNI 入口：一条 SSE 消息（JSON 原文）。kind=approval|question|retract。 */
+  @JvmStatic
+  fun onCard(json: String) {
+    if (!started) return
+    val ctx = appContext ?: return
+    executor.execute {
+      try {
+        val msg = JSONObject(json)
+        val id = msg.optString("id")
+        if (id.isEmpty()) return@execute
+        when (msg.optString("kind")) {
+          "retract" -> {
+            cards.remove(id)
+            NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+          }
+          "approval", "question" -> {
+            cards[id] = msg
+            showCard(ctx, id, msg)
+          }
+        }
+      } catch (e: Exception) {
+        Log.w(TAG, "onCard: ${e.message}")
+      }
+    }
+  }
+
+  private fun showCard(ctx: Context, id: String, msg: JSONObject) {
+    val kind = msg.optString("kind")
+    val tool = msg.optString("toolName")
+    val reason = msg.optString("reason")
+    val title = if (kind == "approval") "审批等待：$tool" else "dsh 有新提问"
+    // 隐私规则：question 卡不带问题文本（reason 字段对 question 恒空）。
+    val text = if (kind == "approval" && reason.isNotEmpty()) reason else "点击查看并处理"
+
+    val open = Intent(ctx, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    }
+    val openPi = PendingIntent.getActivity(ctx, id.hashCode(), open,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+    // 审批卡在展开态补一行超时说明（设计 04 ① 的脚注）；收起态仍只显示 reason。
+    val bigText = if (kind == "approval") {
+      "$text\n110 秒内无人应答将自动拒绝（沉默不是同意）"
+    } else text
+    val builder = NotificationCompat.Builder(ctx, CHANNEL_ID)
+      .setSmallIcon(android.R.drawable.ic_dialog_info)
+      .setContentTitle(title)
+      .setContentText(text)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+      .setContentIntent(openPi)
+      .setAutoCancel(true)
+      .setPriority(NotificationCompat.PRIORITY_HIGH)
+      .setCategory(NotificationCompat.CATEGORY_REMINDER)
+
+    if (kind == "approval") {
+      builder.addAction(0, "允许一次", answerPi(ctx, id, "allowed-once"))
+      builder.addAction(0, "拒绝", answerPi(ctx, id, "rejected"))
+    }
+
+    try {
+      NotificationManagerCompat.from(ctx).notify(id.hashCode(), builder.build())
+    } catch (e: SecurityException) {
+      // POST_NOTIFICATIONS 被拒：降级为仅 App 内可见（cards 表仍在）。
+      Log.w(TAG, "notification permission denied: ${e.message}")
+    }
+  }
+
+  private fun answerPi(ctx: Context, id: String, decision: String): PendingIntent {
+    val intent = Intent(ctx, AnswerReceiver::class.java).apply {
+      action = ACTION_ANSWER
+      putExtra(EXTRA_ID, id)
+      putExtra(EXTRA_DECISION, decision)
+    }
+    return PendingIntent.getBroadcast(ctx, (id + decision).hashCode(), intent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+  }
+
+  /** action 按钮接收器：撤卡 → 交 Rust 发应答 → 结果更新为已处理提示。 */
+  class AnswerReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+      if (intent.action != ACTION_ANSWER) return
+      val id = intent.getStringExtra(EXTRA_ID) ?: return
+      val decision = intent.getStringExtra(EXTRA_DECISION) ?: return
+      if (decision != "allowed-once" && decision != "rejected") return
+      cards.remove(id)
+      NotificationManagerCompat.from(context).cancel(id.hashCode())
+      executor.execute {
+        try {
+          nativeAnswer(id, decision)
+        } catch (e: Exception) {
+          Log.w(TAG, "answer failed: ${e.message}")
+        }
+      }
+    }
+  }
+}

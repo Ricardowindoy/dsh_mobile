@@ -1,0 +1,173 @@
+{
+  "note": "派生层算式与判据。tint=WCAG 1.4.3 文本 ≥4.5（会拦）；line/ring 只记录实测（发丝线按设计就是低对比，唯一标识另有语义色文字）；focusIndicator=1.4.11 非文本 ≥3.0（会拦）；material=断言浅色档复现上游原值（会拦）。",
+  "surfaceLight": "#ffffff",
+  "surfaceDark": "#1c1c1e",
+  "items": [
+    {
+      "name": "--set-danger-tint",
+      "key": "danger",
+      "kind": "tint",
+      "alphaLight": 0.05,
+      "alphaDark": 0.08,
+      "light": "rgba(215, 0, 21, 0.05)",
+      "dark": "rgba(255, 69, 58, 0.08)",
+      "textOnTintLight": 4.53,
+      "textOnTintDark": 4.61,
+      "lineVsSurfaceLight": 1.09,
+      "lineVsSurfaceDark": 1.08
+    },
+    {
+      "name": "--set-warn-tint",
+      "key": "warn",
+      "kind": "tint",
+      "alphaLight": 0.04,
+      "alphaDark": 0.1,
+      "light": "rgba(178, 80, 0, 0.04)",
+      "dark": "rgba(255, 214, 10, 0.1)",
+      "textOnTintLight": 4.53,
+      "textOnTintDark": 9.56,
+      "lineVsSurfaceLight": 1.06,
+      "lineVsSurfaceDark": 1.26
+    },
+    {
+      "name": "--set-ok-line",
+      "key": "ok",
+      "kind": "line",
+      "alphaLight": 0.3,
+      "alphaDark": 0.3,
+      "light": "rgba(26, 143, 74, 0.3)",
+      "dark": "rgba(48, 209, 88, 0.3)",
+      "textOnTintLight": 2.64,
+      "textOnTintDark": 4.47,
+      "lineVsSurfaceLight": 1.47,
+      "lineVsSurfaceDark": 1.88
+    },
+    {
+      "name": "--set-danger-line",
+      "key": "danger",
+      "kind": "line",
+      "alphaLight": 0.3,
+      "alphaDark": 0.3,
+      "light": "rgba(215, 0, 21, 0.3)",
+      "dark": "rgba(255, 69, 58, 0.3)",
+      "textOnTintLight": 2.84,
+      "textOnTintDark": 3.36,
+      "lineVsSurfaceLight": 1.76,
+      "lineVsSurfaceDark": 1.49
+    },
+    {
+      "name": "--set-warn-line",
+      "key": "warn",
+      "kind": "line",
+      "alphaLight": 0.3,
+      "alphaDark": 0.3,
+      "light": "rgba(178, 80, 0, 0.3)",
+      "dark": "rgba(255, 214, 10, 0.3)",
+      "textOnTintLight": 3.13,
+      "textOnTintDark": 5.36,
+      "lineVsSurfaceLight": 1.55,
+      "lineVsSurfaceDark": 2.25
+    },
+    {
+      "name": "--set-ring",
+      "key": "brand",
+      "kind": "ring",
+      "alphaLight": 0.22,
+      "alphaDark": 0.26,
+      "light": "rgba(0, 113, 227, 0.22)",
+      "dark": "rgba(61, 157, 255, 0.26)",
+      "textOnTintLight": 3.2,
+      "textOnTintDark": 3.93,
+      "lineVsSurfaceLight": 1.36,
+      "lineVsSurfaceDark": 1.54
+    },
+    {
+      "name": "--set-ok-ink",
+      "kind": "ink",
+      "sourceKey": "ok",
+      "threshold": 4.5,
+      "light": "#178143",
+      "dark": "#30d158",
+      "lightScale": 0.9,
+      "darkScale": 1,
+      "contrastLight": 4.53,
+      "contrastDark": 8.42,
+      "sourceContrastLight": 3.8,
+      "note": "沿 RGB 等比压暗直到压卡片/压画布两侧都 ≥4.5（浅色系数 0.9，深色 1；系数 1 表示官方值已达标）"
+    },
+    {
+      "name": "--set-warn-ink",
+      "kind": "ink",
+      "sourceKey": "warn",
+      "threshold": 4.5,
+      "light": "#b25000",
+      "dark": "#ffd60a",
+      "lightScale": 1,
+      "darkScale": 1,
+      "contrastLight": 4.77,
+      "contrastDark": 12.05,
+      "sourceContrastLight": 4.77,
+      "note": "沿 RGB 等比压暗直到压卡片/压画布两侧都 ≥4.5（浅色系数 1，深色 1；系数 1 表示官方值已达标）"
+    },
+    {
+      "name": "--set-danger-ink",
+      "kind": "ink",
+      "sourceKey": "danger",
+      "threshold": 4.5,
+      "light": "#d70015",
+      "dark": "#ff453a",
+      "lightScale": 1,
+      "darkScale": 1,
+      "contrastLight": 4.94,
+      "contrastDark": 4.99,
+      "sourceContrastLight": 4.94,
+      "note": "沿 RGB 等比压暗直到压卡片/压画布两侧都 ≥4.5（浅色系数 1，深色 1；系数 1 表示官方值已达标）"
+    },
+    {
+      "name": "--set-brand-ink",
+      "kind": "ink",
+      "sourceKey": "brand",
+      "threshold": 4.5,
+      "light": "#006cda",
+      "dark": "#3d9dff",
+      "lightScale": 0.96,
+      "darkScale": 1,
+      "contrastLight": 4.64,
+      "contrastDark": 6.05,
+      "sourceContrastLight": 4.31,
+      "note": "沿 RGB 等比压暗直到压卡片/压画布两侧都 ≥4.5（浅色系数 0.96，深色 1；系数 1 表示官方值已达标）"
+    },
+    {
+      "name": "(focus 描边)",
+      "kind": "focusIndicator",
+      "uses": "--set-brand vs --set-surface",
+      "contrastLight": 4.7,
+      "contrastDark": 6.05,
+      "threshold": 3
+    },
+    {
+      "name": "--set-placeholder",
+      "kind": "derived",
+      "threshold": 3,
+      "light": "#86868b",
+      "dark": "#88888d",
+      "contrastLight": 3.48,
+      "contrastDark": 4.27,
+      "note": "浅色=官方 text-3 原值；深色=官方 text-3(#6e6e73) 与 text-2(#a1a1a6) 的逐通道中点，因为官方 text-3 在深色 surface-2 上只有 2.97"
+    },
+    {
+      "name": "--set-material-bar",
+      "kind": "material",
+      "light": "rgba(255, 255, 255, 0.72)",
+      "dark": "rgba(28, 28, 30, 0.72)",
+      "note": "同 alpha 压官方 surface（浅色档复现上游原值）"
+    },
+    {
+      "name": "--set-material-edge",
+      "kind": "material",
+      "light": "rgba(0, 0, 0, .08)",
+      "dark": "rgba(255, 255, 255, .1)",
+      "note": "偏离上游浅色 rgba(255,255,255,.6)"
+    }
+  ]
+}

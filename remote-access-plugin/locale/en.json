@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Remote access",
+    "description": "Switch controlled nodes and relay entrances from a Settings section: view per-node online state, relay/tunnel status and local services, on Linux (systemd) and Windows (services)."
+  }
+}

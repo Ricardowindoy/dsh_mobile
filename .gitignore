@@ -1,0 +1,112 @@
+# Go
+*.exe
+*.test
+.gopath/
+.gocache/
+go.env
+# 本机构建环境脚本（机器特定路径，勿入库）
+go.env.sh
+dsh-token-refresh.py
+
+# Node / Tauri
+mobile/node_modules/
+mobile/.pnpm-store/
+mobile/.cargo-home/
+mobile/.gradle-home/
+mobile/src-tauri/target/
+mobile/src-tauri/gen/schemas/
+# Android build artifacts (gen/android gradle 工程本身入库, 构建产物忽略)
+mobile/src-tauri/gen/android/app/build/
+mobile/src-tauri/gen/android/app/src/main/assets/
+mobile/src-tauri/gen/android/.gradle/
+mobile/src-tauri/gen/android/local.properties
+mobile/dist/
+# 签名密钥（自签证书，勿提交）
+mobile/android-keystore/
+# 验证工作区（含私有 CA / 叶证书私钥，勿提交）
+.verify-tls/
+# 更新包二进制（由 scripts/release.sh 生成，不入库）
+updates/android/
+updates/windows/
+updates/linux/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+dsh-tunnel
+run-tunnel.sh
+
+# 连接生命周期日志（本机诊断产物，勿提交）
+logs/
+# 生产 TLS 材料（私有 CA 与叶证书私钥，勿提交）
+.tls/
+.dsh-web-token
+
+# jet-hub-daily 运行时产物（cookie 罐 / 状态 / 日志 / 隔离测试的副本）
+jet-hub-daily/state/
+jet-hub-daily/logs/
+jet-hub-daily/state-e2e/
+jet-hub-daily/logs-e2e/
+.jet-hub-src/
+
+# 已从跟踪移除的产物/日志（历史遗留，勿重新 add）
+tunnel.log
+dsh-relay
+dsh-tunnel.deploy
+*.bak.*
+dist-relay/
+.toolchain/
+mobile/.toolchain/
+logs.archive/
+dsh-tunnel.bak.*
+dsh-relay.amd64.new
+
+# 本机运维/无关工具，勿入库
+.dsh-token-refresh.sh
+jet-hub-daily/
+jet-hub-daily/.wbg-cache/
+dsh-tunnel.bak-*
+run-tunnel.sh.bak-*
+dsh-forwarder-client
+dsh-tunnel
+dsh-relay
+dsh-relay.amd64.new
+updates/tunnel-darwin/
+updates/tunnel-linux/
+
+# 文档已作为私有子模块 docs-repo/（dsh_mobile-docs）管理；
+# 本地散落副本 docs/ kb/ 若出现也不入库。
+/docs/
+/kb/
+
+# CI 产物收集树（工作流内生成，勿提交）
+release/
+# iOS 工程由 CI `tauri ios init` 生成（勿提交）
+mobile/src-tauri/gen/apple/
+
+# 插件/工具目录的依赖（通用）
+node_modules/
+
+# 插件本地联调用的 node_modules 软链（指向工作区外）
+approval-push-plugin/node_modules
+
+# DSH remote-access 插件：本机 DSH 运行时依赖（~/.dsh profile 以 link: 引用），
+# 属于运维面而非 dsh_mobile 应用代码，仅依赖不入库（目录本体是否入库由运维会话决定）。
+remote-access-plugin/node_modules/
+# 生产 DSH 实例（3082）以 link: 指向本目录 —— cordis.patch.yml 是活配置
+# （真实端点、CA 路径、token 文件路径），只在部署机本地维护，不入库。
+remote-access-plugin/cordis.patch.yml
+remote-access-plugin/pnpm-lock.yaml
+
+# 深度排查的临时工作区（MLKit AAR 反汇编、APK 提取、依赖 crate 副本）
+.diag/
+
+# jet-hub-daily 运维线已迁出本仓（迁移暂存目录 .daily-move/ 已清）
+.daily-move/
+
+# remote-access 插件 UI 改造的验证工作台（另一会话的隔离工作区）
+.verify-ui/

@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · 桌面 App 窗口 · dsh_mobile Apple 三端</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./tokens.css">
+<link rel="stylesheet" href="./base.css">
+<style>
+/* =============================================================================
+ * 02 · 桌面 App 窗口（同一份连接页的宽屏形态）
+ * -----------------------------------------------------------------------------
+ * 事实来源（不是凭印象，逐条可查）：
+ *   src-tauri/tauri.conf.json → windows[0] = { title:"dsh", width:420, height:760,
+ *     resizable:true, fullscreen:false }；没写 decorations → Tauri 默认 true（系统标题栏）。
+ *   mobile/src/index.html + styles.css → 三段式（app-bar / screen-main / bottom-bar），
+ *     主区 max-width 现在对**所有视口**都是 460px；自检文案与更新卡文案见 main.js。
+ *
+ * 本页唯一的排版大决策（宽屏的全部难点就在这）：
+ *   窗口拉宽到 900 时，内容收到 max-width 560px 居中、两侧留白，**表单不拉满**。
+ *   理由：输入框一路撑到 868px，label 与控件隔着半屏，两个字段的小工具窗会读起来
+ *   像后台管理系统；而且错误横幅、自检结果一旦被推离它们解释的那个按钮，因果
+ *   关系就得靠用户自己 eyeball。宽屏要买到的是「呼吸 + 一次看清全部」，
+ *   不是「每一行都能塞更多字」。
+ *   560 取自 docs/设计规范.md「桌面」段给的 460–560 区间上限：字段字号仍是 16px，
+ *   两字段 + 主按钮 + 单行自检要在 700 高里一屏放完（不出现滚动条才有首屏感）。
+ *   —— 这条未经真人评审，实测觉得挤就退回 460，页尾如实登记为待决。
+ *
+ * 缩放约定：
+ *   「1280×800 外壳全景」按 scale(0.5) 画，只表达**位置与比例**，窗内是占位结构；
+ *   排版细节全在下面的 1:1 窗口稿里（420×760 / 900×700 就是真实 CSS 像素，字可直接读）。
+ *   同一页混两种比例是刻意的：整块缩到 0.5 会让 15px 正文变成不可读的 7.5px。
+ *
+ * 闸门相关：
+ *   本页**不声明触屏目标**（不给 html 或 .device 加那个值为 touch 的 data-target 属性）
+ *   —— 桌面命中区档位是 28px，一声明就被 44px 规则整页误判（这条规则扫的是全文子串，
+ *   连注释和正文里的字面量都算，所以这段说明本身也不能把它写全）。
+ *   触屏稿要显式加 .btn--touch（min-height 44px）并声明目标设备属性，闸门才按触屏查。
+ *   颜色只来自 var(--set-*)；动效只碰 transform / opacity；内联 style 只写几何。
+ * ========================================================================== */
+
+/* ---------- 页壳 ---------- */
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 56px; }
+.lede { margin: 10px 0 0; max-width: 68ch; color: var(--set-text-2); }
+h2.sec { font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--set-text-2); margin: 40px 0 0; }
+h2.sec .dim { font-weight: 400; color: var(--set-text-2); }
+.note { margin: 12px 0 0; font-size: 12px; line-height: 1.65; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.note strong { color: var(--set-text); font-weight: 600; }
+.claims { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 0; }
+@media (max-width: 980px) { .claims { grid-template-columns: minmax(0, 1fr); } }
+.claim .no { font: 600 11px/16px var(--set-font-mono); letter-spacing: .1em; color: var(--set-brand-ink); }
+.claim h3 { margin: 6px 0 6px; font-size: 15px; line-height: 22px; font-weight: 600; letter-spacing: -.016em; }
+.claim p { margin: 0; font-size: 13px; line-height: 21px; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin: 14px 0 0; }
+
+/* ---------- 截图排布 ---------- */
+.shots { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; margin: 14px -24px 0; padding: 0 24px; }
+.shot { flex: 0 0 auto; min-width: 0; }
+.shot__foot { margin: 8px 0 0; font-size: 12px; line-height: 1.55; color: var(--set-text-2); max-width: 560px; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- 窗口框：.device 就是窗口本体（高度来自内联 style，见每块窗口） ---------- */
+.win { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+.win--420 { width: 420px; height: 760px; }
+.win--900 { width: 900px; height: 700px; }
+.win__bar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  height: 34px; padding: 0 12px;
+}
+.win__dots { display: flex; flex: 0 0 auto; gap: 6px; }
+.win__dot { width: 11px; height: 11px; border-radius: 50%; background: var(--set-text-3); opacity: .4; }
+.win__name {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 12px; letter-spacing: .01em; color: var(--set-text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.win__geo { flex: 0 0 auto; font: 11px/1 var(--set-font-mono); letter-spacing: .02em; color: var(--set-text-2); }
+.win__body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---------- 窗口内的页面本体（= 真实连接页的三段式） ---------- */
+.appbar { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 10px 16px; }
+.appbar--inset { justify-content: center; }
+.logo {
+  flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center;
+  border-radius: var(--set-radius-sm); background: var(--set-surface-2);
+  box-shadow: inset 0 0 0 1px var(--set-line); color: var(--set-text-2);
+}
+.appname { flex: 1 1 auto; min-width: 0; font-family: var(--set-font-display); font-size: 17px; font-weight: 600; letter-spacing: -.016em; }
+.ver {
+  flex: 0 0 auto; padding: 3px 9px; font-size: 12px; letter-spacing: .01em;
+  font-variant-numeric: tabular-nums; color: var(--set-text-2);
+  border-radius: var(--set-radius-pill); background: var(--set-surface-2);
+  box-shadow: inset 0 0 0 1px var(--set-line);
+}
+.main { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; padding: 4px 16px 12px; }
+.stack { width: 100%; margin: auto 0; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.page-title { margin: 2px 0 0; font-family: var(--set-font-display); font-size: 24px; font-weight: 700; line-height: 1.14; letter-spacing: -.022em; }
+.page-sub { margin: 0; font-size: 13px; line-height: 1.45; letter-spacing: .006em; color: var(--set-text-2); }
+.bottombar { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; min-height: 52px; padding: 8px 16px; }
+.bottomline { font-size: 12px; line-height: 1.45; letter-spacing: .01em; color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------- 表单：同行字段（桌面档同样要密度）---------- */
+.tag { flex: 0 0 auto; padding: 1px 6px; font-size: 11px; font-weight: 500; letter-spacing: .02em; color: var(--set-text-2); border-radius: var(--set-radius-sm); background: var(--set-surface-2); }
+.field-wrap { position: relative; display: flex; align-items: center; }
+.field-wrap--act .field__input { padding-right: 44px; }
+.eye {
+  position: absolute; right: 4px; width: 32px; height: 32px;   /* 桌面档收到 32：见页尾待决项 7 */
+  display: grid; place-items: center; padding: 0; color: var(--set-text-2);
+  border: 0; border-radius: var(--set-radius-sm); background: transparent; cursor: pointer;
+}
+/* 桌面档的同行字段：标签左、控件右。桌面窗口只有 420–560 宽，
+   竖排（标签行 + 输入行）会让"两个字段"占掉 1/3 窗高 —— 桌面同样要密度。 */
+.frow {
+  display: flex; align-items: center; gap: 12px;
+  min-height: 34px; padding: 5px 14px; min-width: 0;
+}
+.frow + .frow { box-shadow: inset 0 1px 0 var(--set-line); }
+.frow__label { flex: 0 0 auto; font-size: 13px; color: var(--set-text); white-space: nowrap; }
+.frow__label span { display: inline-flex; align-items: center; gap: 6px; }
+.frow__control { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: flex-end; }
+.frow .field__input {
+  background: transparent; border: 0; border-radius: 0; padding: 4px 0;
+  text-align: right; font-size: 13px; line-height: 18px; color: var(--set-text-2);
+}
+.frow .field__input:focus { background: transparent; }
+.frow .field-wrap { flex: 1 1 auto; min-width: 0; }
+.frow .eye { position: static; flex: 0 0 auto; }
+.frow:has(.eye) .field__input { padding-right: 36px; }
+.btn--with-icon { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn--with-icon svg { flex: 0 0 auto; }
+.submit { width: 100%; margin-top: 16px; }
+/* 分组脚注：说明合并到组下（不再每个字段下面挂一句） */
+.fgroup-foot {
+  margin: 8px 0 0; padding: 0 2px;
+  font-size: 12px; line-height: 1.45; letter-spacing: .01em;
+  color: var(--set-text-2); min-width: 0; overflow-wrap: anywhere;
+}
+/* 图形化动作按钮（桌面档）：视觉 32、图标 16，命中区 ::before 扩到 44 */
+.icon-btn {
+  flex: 0 0 auto; position: relative;
+  display: inline-grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; margin: 0;
+  color: var(--set-brand-ink); background: transparent; border: 0;
+  border-radius: var(--set-radius-sm); cursor: pointer;
+}
+.icon-btn::before { content: ""; position: absolute; inset: -6px; }
+.icon-btn svg { display: block; }
+.icon-btn:active { transform: scale(var(--set-press-scale)); }
+.icon-btn:focus-visible { outline: 2px solid var(--set-brand); outline-offset: 1px; }
+
+.diag { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin-top: 12px; min-height: 32px; }
+.actions { display: flex; gap: 10px; margin-top: 14px; }
+.actions .btn { flex: 1 1 0; }
+.banner .banner__text { min-width: 0; overflow-wrap: anywhere; }
+
+/* 更新卡片内的三段文字：类名与真实代码的 #update 结构一一对应 */
+.up-title { margin: 0 0 4px; font-family: var(--set-font-display); font-size: 17px; font-weight: 600; line-height: 1.2; letter-spacing: -.016em; }
+.up-meta { margin: 0; font-size: 12px; letter-spacing: .01em; font-variant-numeric: tabular-nums; color: var(--set-text-2); }
+.up-note { margin: 10px 0 0; font-size: 13px; line-height: 1.5; color: var(--set-text-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 自检结果：颜色 + 文字一起表达，不只靠颜色（规范硬规矩） */
+.st { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; line-height: 1.45; letter-spacing: .01em; color: var(--set-text-2); overflow-wrap: anywhere; }
+.st[data-tone="ok"] { color: var(--set-ok-ink); }
+.st[data-tone="warn"] { color: var(--set-warn-ink); }
+.st[data-tone="bad"] { color: var(--set-danger-ink); }
+
+/* ---------- 宽屏收束：max-width 560 居中 + 可见的留白参考线（落地不画） ---------- */
+.col { position: relative; width: 100%; max-width: 560px; margin: 0 auto; min-width: 0; }
+.appbar__in { display: flex; align-items: center; gap: 10px; width: 100%; max-width: 560px; min-width: 0; }
+.col__guide { position: absolute; top: 0; bottom: 0; width: 1px; border-left: 1px dashed var(--set-brand); opacity: .28; pointer-events: none; }
+.col__guide--l { left: -16px; }
+.col__guide--r { right: -16px; }
+.col__tag { position: absolute; top: -6px; font: 10px/1 var(--set-font-mono); letter-spacing: .04em; color: var(--set-brand-ink); opacity: .65; }
+.col__tag--l { left: -14px; }
+.col__tag--r { right: -14px; }
+.gutter-tag { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 10px 0 0; font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); }
+
+/* ---------- 桌面外壳全景（scale 0.5，只画结构与位置；窗内是占位条） ---------- */
+.shell-wrap { width: 640px; height: 400px; overflow: hidden; }
+.shell { position: relative; width: 1280px; height: 800px; transform: scale(0.5); transform-origin: top left; }
+.shell__wall { position: absolute; top: 0; left: 0; right: 0; bottom: 26px; background: var(--set-surface-2); }
+.shell__menu { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 12px; z-index: 3; }
+.shell__menu span { font-size: 12px; color: var(--set-text-2); }
+.miniwin { position: absolute; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--set-line); border-radius: var(--set-radius); background: var(--set-bg); box-shadow: var(--set-shadow); }
+.miniwin--a { left: 30px; top: 10px; width: 420px; height: 760px; z-index: 1; }
+.miniwin--b { left: 330px; top: 50px; width: 900px; height: 700px; z-index: 2; box-shadow: var(--set-shadow-lift); }
+.miniwin__bar { flex: 0 0 auto; height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 8px; }
+.miniwin__bar b { font: 400 11px/1 var(--set-font-mono); letter-spacing: .02em; color: var(--set-text-2); }
+.miniwin__body { flex: 1 1 auto; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.miniwin__col { width: 100%; max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.miniwin__wide { width: 100%; display: flex; flex-direction: column; min-width: 0; }
+.bar { border-radius: var(--set-radius-sm); background: var(--set-surface-2); box-shadow: inset 0 0 0 1px var(--set-line); }
+.bar--card { border-radius: var(--set-radius); background: var(--set-surface); box-shadow: var(--set-shadow); }
+.bar--panel { border-radius: var(--set-radius-panel); background: var(--set-surface); box-shadow: var(--set-shadow-lift); }
+.bar--h1 { width: 46%; height: 22px; }
+.bar--h2 { width: 62%; height: 10px; }
+.bar--foot { width: 38%; height: 10px; }
+.bar--card-180 { height: 180px; }
+.bar--card-300 { height: 300px; }
+.bar--panel-76 { height: 76px; }
+.bar--w30 { width: 30%; height: 22px; }
+.bar--w100 { width: 100%; height: 10px; }
+.bar--w70 { width: 70%; height: 10px; }
+
+/* ---------- 三态对照 / 表格 / 演示 ---------- */
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 14px 0 0; }
+.state__row { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.state__name { font: 600 11px/16px var(--set-font-mono); letter-spacing: .08em; color: var(--set-text-2); }
+.states p { margin: 0 0 6px; }
+.m0 { margin: 0; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 0; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--set-line); min-width: 0; vertical-align: top; }
+th { font-size: 11px; letter-spacing: .02em; color: var(--set-text-2); font-weight: 600; }
+td code, li code, p code { font-family: var(--set-font-mono); font-size: 12px; overflow-wrap: anywhere; }
+ul.tight { margin: 8px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--set-text-2); }
+ul.tight li + li { margin-top: 4px; }
+.demo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 0; }
+.focus-demo { outline: 2px solid var(--set-brand); outline-offset: 2px; }   /* 与 base.css 的 :focus-visible 同值 */
+.tappable {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 6px 12px;
+  border-radius: var(--set-radius-sm); background: var(--set-surface-2); color: var(--set-text);
+  font-size: 13px; cursor: pointer;
+  transition: transform var(--set-dur-press) var(--set-ease-out), opacity var(--set-dur-press) var(--set-ease-out);
+}
+.sizing { display: flex; align-items: flex-end; gap: 12px; margin: 12px 0 0; }
+.sizing__chip { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.sizing__box { border-radius: var(--set-radius-sm); background: var(--set-surface-2); box-shadow: inset 0 0 0 1px var(--set-line); padding: 0 14px; font: 11px/1 var(--set-font-mono); color: var(--set-text-2); }
+/* 高度只由组件类给（.btn → 28 / .btn--touch → 44）：这里再写 min-height 就成了自证，测不到 base.css 那一档 */
+
+/* 鼠标 hover 只在真有悬停能力的设备上出现（触屏会把样式钉在悬停态） */
+@media (hover: hover) and (pointer: fine) {
+  .tappable:hover { opacity: .82; }
+  .miniwin:hover { opacity: .88; }
+}
+.tappable:active { transform: scale(var(--set-press-scale)); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1 class="t-large-title">02 · 桌面 App 窗口</h1>
+  <p class="lede">同一个连接页的宽屏形态。事实基线：<code>src-tauri/tauri.conf.json</code> 里窗口默认 <code>420×760</code>、<code>resizable: true</code>、没写 <code>decorations</code>（即 Tauri 默认 = 系统标题栏）。桌面不是"手机版放大"，它多出三件真实的事：窗口可被拉宽、鼠标有 hover、键盘 Enter 必须与按钮走同一条提交路径。<strong>0.1.19 起手机侧多了「扫码配对」主路径，但桌面看不到它</strong>：真实代码按 <code>navigator.userAgent</code> 非 Android 即隐藏整个扫码分组（桌面没有相机插件），所以本页各帧保持手动表单形态——这不是漏画，是真实行为。</p>
+
+  <div class="claims">
+    <div class="card claim enter">
+      <div class="no">01</div>
+      <h3>宽了要收，不能拉满</h3>
+      <p>900 宽时内容 <code>max-width: 560px</code> 居中、两侧各留白，表单不拉满。撑满会让两个字段的小工具窗读起来像后台管理系统，还把错误横幅推离它解释的那个按钮。</p>
+    </div>
+    <div class="card claim enter enter--2">
+      <div class="no">02</div>
+      <h3>命中区是两档，不是一档</h3>
+      <p>桌面档 <code>.btn</code> 下限 28px（本页故意不声明触屏目标，免得被 44px 规则误判）；触屏档要在同一个按钮上<strong>显式加 <code>.btn--touch</code></strong> 抬到 44px。同一份组件，两档几何。</p>
+    </div>
+    <div class="card claim enter enter--2">
+      <div class="no">03</div>
+      <h3>深色挂在窗口上，不另开一页</h3>
+      <p>深色是 <code>--set-*</code> 的一层子树覆盖：给某个 <code>.device</code> 挂 <code>data-theme="dark"</code> 就整窗换档。做两个文件必然漂，所以并排画在同一页里。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">桌面外壳全景 <span class="dim">· 1280×800，按 scale(0.5) 画；只表达位置与比例，窗内是占位结构，排版细节看下面的 1:1 稿</span></h2>
+  <div class="stage">
+    <div class="shot">
+      <span class="device__label">外壳 1280×800 · 左＝默认窗口 420×760 · 前＝拉宽后 900×700（两个时刻叠放示意；真实桌面只有一份窗口）</span>
+      <div class="device shell-wrap">
+        <div class="shell">
+          <div class="shell__wall"></div>
+
+          <!-- 默认窗口：760 高在 800 屏幕上只剩 40px 余量 —— "默认宽 420"最直接的后果 -->
+          <div class="miniwin miniwin--a">
+            <div class="miniwin__bar chrome chrome--top"><b>420 × 760</b></div>
+            <div class="miniwin__body">
+              <div class="bar bar--h1"></div>
+              <div class="bar bar--h2"></div>
+              <div class="bar bar--card bar--card-180"></div>
+              <div class="bar bar--foot"></div>
+            </div>
+          </div>
+
+          <!-- 拉宽到 900：内容列仍被 max-width 560 收住，两侧留白 -->
+          <div class="miniwin miniwin--b">
+            <div class="miniwin__bar chrome chrome--top"><b>900 × 700</b></div>
+            <div class="miniwin__body">
+              <div class="miniwin__wide">
+                <div class="bar bar--w30"></div>
+              </div>
+              <div class="miniwin__col">
+                <div class="bar bar--card bar--card-300"></div>
+                <div class="bar bar--w100"></div>
+                <div class="bar bar--w70"></div>
+                <div class="bar bar--panel bar--panel-76"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="shell__menu chrome chrome--bottom">
+            <span>dsh</span>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">760 高的窗口放进 800 高的屏幕，上下只剩 40px 可分配 —— 默认档在桌面上是根竖长条。这正是页尾「默认宽是否提到 520」那条待决项的物理成因：宽度不收，高度就先撞天花板。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">默认窗口 420×760 · 1:1（真实 CSS 像素，字可直接读）</h2>
+  <div class="shots">
+
+    <!-- ① 常态：自检 ok -->
+    <div class="shot">
+      <span class="device__label">① 常态 · 浅色 · 420×760 · 自检 ok</span>
+      <div class="device win--420">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">420 × 760</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar chrome chrome--top">
+              <span class="logo" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+              </span>
+              <span class="appname">dsh</span>
+              <span class="ver">v0.1.19</span>
+            </div>
+            <div class="main">
+              <div class="stack">
+                <h3 class="page-title">连接 dsh</h3>
+                <p class="page-sub">填公网 Relay 地址与访问 token，即可打开 dsh 界面。</p>
+                <section class="card">
+                  <!-- 用 <form> 承载：桌面 Enter 与按钮提交是同一条路径（真实代码 connectForm submit → submitConnect） -->
+                  <form onsubmit="return false">
+                    <div class="frow">
+                      <label class="frow__label" for="d-relay-1">Relay 地址</label>
+                      <div class="frow__control">
+                        <input id="d-relay-1" class="field__input" type="url" value="https://relay.example.com" autocomplete="url" spellcheck="false">
+                      </div>
+                    </div>
+                    <div class="frow">
+                      <label class="frow__label" for="d-token-1"><span>访问 token</span><span class="tag">可选</span></label>
+                      <div class="frow__control">
+                        <div class="field-wrap field-wrap--act">
+                          <input id="d-token-1" class="field__input" type="password" value="••••••••••••" spellcheck="false">
+                          <button class="eye" type="button" aria-label="显示或隐藏 token">
+                            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                    <div class="diag">
+                      <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                      <span class="st" data-tone="ok"><i class="dot dot--ok"></i>Relay 可达 132ms · 需要 token · 设备在线</span>
+                    </div>
+                  </form>
+                  <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                </section>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">顶栏那条 <code>.chrome</code> 是<strong>窗口内沿的材质条，不是原生标题栏</strong>：Tauri 默认 <code>decorations: true</code>，真正的标题栏由系统画，Web 端拿不到；稿里三个点只是示意，颜色也只能用令牌灰（不画 macOS 红黄绿 —— 那要么裸色值、要么新增语义令牌，都不属于本页能决定的事）。自检那行是「三个事实拼成的长句」，在 420 宽里放不下与按钮同一排，<code>.diag</code> 的 <code>flex-wrap</code> 会把它挤到下一行。</p>
+    </div>
+
+    <!-- ② 错误态 -->
+    <div class="shot">
+      <span class="device__label">② 错误态 · 浅色 · 420×760 · 需要 token 却没填</span>
+      <div class="device win--420">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">420 × 760</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar chrome chrome--top">
+              <span class="logo" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+              </span>
+              <span class="appname">dsh</span>
+              <span class="ver">v0.1.19</span>
+            </div>
+            <div class="main">
+              <div class="stack">
+                <h3 class="page-title">连接 dsh</h3>
+                <p class="page-sub">填公网 Relay 地址与访问 token，即可打开 dsh 界面。</p>
+                <section class="card">
+                  <form onsubmit="return false">
+                    <div class="frow">
+                      <label class="frow__label" for="d-relay-2">Relay 地址</label>
+                      <div class="frow__control">
+                        <input id="d-relay-2" class="field__input" type="url" value="https://relay.example.com" autocomplete="url" spellcheck="false">
+                      </div>
+                    </div>
+                    <div class="frow">
+                      <label class="frow__label" for="d-token-2"><span>访问 token</span><span class="tag">可选</span></label>
+                      <!-- 出错的那个字段自己带焦点环：错误与它解释的控件在视觉上相邻，不靠"标签写着 token 那行"来指认 -->
+                      <div class="frow__control">
+                        <div class="field-wrap">
+                          <input id="d-token-2" class="field__input focus-demo" type="password" placeholder="留空则不发送 token" spellcheck="false">
+                        </div>
+                      </div>
+                    </div>
+                    <!-- 真实文案：main.js connect() 里 relayNeedsAuth 为真时写进 #error-text -->
+                    <p class="banner banner--bad" role="alert">
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                      <span class="banner__text">该 Relay 需要访问 token，请填写后再连接</span>
+                    </p>
+                    <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                    <div class="diag">
+                      <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                      <span class="st" data-tone="warn"><i class="dot dot--warn"></i>Relay 可达 118ms · 需要 token · ⚠️ 设备离线（tunnel 没连上）</span>
+                    </div>
+                  </form>
+                  <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                </section>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">错误横幅贴在触发它的主按钮上方，不是页面顶部 —— 读起来属于这次点击。<code>.focus-demo</code> 就是把 <code>:focus-visible</code> 的环（2px brand + 2px offset）钉在静态稿上让人看见；真实实现里它只在键盘路径出现，鼠标点击不打扰。同窗口里自检结果处于 warn：错误（缺 token）与警告（设备离线）是两条独立事实，同时出现不冲突。</p>
+    </div>
+
+    <!-- ③ 更新卡片态（420 里底部被切） -->
+    <div class="shot">
+      <span class="device__label">③ 更新卡片态 · 浅色 · 420×760 · 主卡 + 更新卡同屏，首屏余量只剩约 20px</span>
+      <div class="device win--420">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">420 × 760</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar chrome chrome--top">
+              <span class="logo" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+              </span>
+              <span class="appname">dsh</span>
+              <span class="ver">v0.1.19</span>
+            </div>
+            <div class="main">
+              <div class="stack">
+                <h3 class="page-title">连接 dsh</h3>
+                <p class="page-sub">填公网 Relay 地址与访问 token，即可打开 dsh 界面。</p>
+                <section class="card">
+                  <form onsubmit="return false">
+                    <div class="frow">
+                      <label class="frow__label" for="d-relay-3">Relay 地址</label>
+                      <div class="frow__control">
+                        <input id="d-relay-3" class="field__input" type="url" value="https://relay.example.com" autocomplete="url" spellcheck="false">
+                      </div>
+                    </div>
+                    <div class="frow">
+                      <label class="frow__label" for="d-token-3"><span>访问 token</span><span class="tag">可选</span></label>
+                      <div class="frow__control">
+                        <div class="field-wrap field-wrap--act">
+                          <input id="d-token-3" class="field__input" type="password" value="••••••••••••" spellcheck="false">
+                          <button class="eye" type="button" aria-label="显示或隐藏 token">
+                            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                  </form>
+                  <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                </section>
+                <!-- 更新卡片：18px 面板层级 + 语义是 sheet（真实代码 #update.update-card） -->
+                <section class="card card--panel enter enter--2">
+                  <p class="up-title">发现新版本 v0.1.16</p>
+                  <p class="up-meta">2026-11-03 · 12.4 MB</p>
+                  <p class="up-note">自动更新失败：下载中断</p>
+                  <div class="actions">
+                    <button class="icon-btn" type="button" aria-label="跳过此版本" title="跳过此版本"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                    <button class="btn btn--primary btn--with-icon" type="button"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg><span>重试下载</span></button>
+                  </div>
+                </section>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">420 档真正的风险在这张图：按本稿自己的盒高累加，主卡 + 更新卡 ≈ 583px，可用高度 ≈ 604px（760 减窗口栏 34、顶栏 52、底栏 54、主区内距 16）—— 余量只剩约 20px。这<strong>不是「放得下」的证据，是「必须实测」的证据</strong>：系统标题栏真实高度、字体实际行高、17px 按钮的真实盒高，任一项浮动 20px，更新卡的动作按钮就掉出首屏（<code>.stack</code> 的 <code>margin:auto 0</code> 在空间不足时塌成 0，内容从顶部开始排，被切的是底栏以上那一条）。</p>
+    </div>
+
+    <!-- ④ 窄档深色（420 里的深色对照） -->
+    <div class="shot">
+      <span class="device__label">④ 同一页 · 深色档（apple-night）挂在窗口框上 · 420×760 · 字段全空的拦截路径</span>
+      <div class="device win--420" data-theme="dark">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">420 × 760</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar chrome chrome--top">
+              <span class="logo" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+              </span>
+              <span class="appname">dsh</span>
+              <span class="ver">v0.1.19</span>
+            </div>
+            <div class="main">
+              <div class="stack">
+                <h3 class="page-title">连接 dsh</h3>
+                <section class="card">
+                  <form onsubmit="return false">
+                    <div class="frow">
+                      <label class="frow__label" for="d-relay-6">Relay 地址</label>
+                      <div class="frow__control">
+                        <input id="d-relay-6" class="field__input" type="url" placeholder="https://relay.example.com" autocomplete="url" spellcheck="false">
+                      </div>
+                    </div>
+                    <div class="frow">
+                      <label class="frow__label" for="d-token-6"><span>访问 token</span><span class="tag">可选</span></label>
+                      <div class="frow__control">
+                        <div class="field-wrap">
+                          <input id="d-token-6" class="field__input" type="password" placeholder="留空则不发送 token" spellcheck="false">
+                        </div>
+                      </div>
+                    </div>
+                    <p class="banner banner--bad" role="alert">
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                      <span class="banner__text">请填写 Relay 地址</span>
+                    </p>
+                    <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                    <div class="diag">
+                      <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                      <span class="st" data-tone="bad"><i class="dot dot--bad"></i>请先填写 Relay 地址</span>
+                    </div>
+                  </form>
+                  <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                </section>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">深色只改一处：<code>&lt;div class="device" data-theme="dark"&gt;</code>。窗口内 <code>--set-*</code> 整批被覆盖，组件层一行不用动。可验的三件事：主按钮文字走 <code>--set-brand-on</code>（近深蓝，不是白）；材质条 <code>--set-material-bar</code> 由官方 <code>--set-surface</code> 同 RGB + .72 派生，压在 <code>#0d0d0f</code> 画布上分层仍在；placeholder 走 <code>--set-text-3</code>，深色那档比浅色更接近「读得出但不抢内容」。<br>这块选的是<strong>字段全空</strong>这条拦截路径：横幅「请填写 Relay 地址」来自 <code>submitConnect()</code>、自检「请先填写 Relay 地址」来自 <code>runSelfCheck()</code> —— 两句相近但不重复，它们是两次独立动作的结果，不是同一条提示渲染了两遍。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">拉宽到 900×700 · 1:1 · 浅与深并排（同一页，深色挂在窗口框上）</h2>
+  <div class="shots">
+
+    <!-- ⑤ 900 浅色：max-width 收束 -->
+    <div class="shot">
+      <span class="device__label">⑤ 拉宽 900×700 · 浅色 · 内容 560 居中（虚线是收束参考线，落地不画）</span>
+      <div class="device win--900">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">900 × 700</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar appbar--inset chrome chrome--top">
+              <span class="appbar__in">
+                <span class="logo" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+                </span>
+                <span class="appname">dsh</span>
+                <span class="ver">v0.1.19</span>
+              </span>
+            </div>
+            <div class="main">
+              <div class="col">
+                <span class="col__guide col__guide--l" aria-hidden="true"></span>
+                <span class="col__guide col__guide--r" aria-hidden="true"></span>
+                <span class="col__tag col__tag--l" aria-hidden="true">560</span>
+                <span class="col__tag col__tag--r" aria-hidden="true">gutter</span>
+                <div class="stack">
+                  <h3 class="page-title">连接 dsh</h3>
+                  <!-- 桌面语境把「手机上」改成「本机」：这条改动属于待决（页尾第 6 行），不代表已定 -->
+                  <p class="page-sub">填公网 Relay 地址与访问 token，即可打开 dsh 界面。</p>
+                  <section class="card">
+                    <form onsubmit="return false">
+                      <div class="frow">
+                        <label class="frow__label" for="d-relay-4">Relay 地址</label>
+                        <div class="frow__control">
+                          <input id="d-relay-4" class="field__input" type="url" value="https://relay.example.com" autocomplete="url" spellcheck="false">
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <label class="frow__label" for="d-token-4"><span>访问 token</span><span class="tag">可选</span></label>
+                        <div class="frow__control">
+                          <div class="field-wrap field-wrap--act">
+                            <input id="d-token-4" class="field__input" type="password" value="••••••••••••" spellcheck="false">
+                            <button class="eye" type="button" aria-label="显示或隐藏 token">
+                              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                      <!-- 宽屏买到的第一件实事：自检结果与按钮同排、单行读完 -->
+                      <div class="diag">
+                        <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                        <span class="st" data-tone="ok"><i class="dot dot--ok"></i>Relay 可达 132ms · 需要 token · 设备在线</span>
+                      </div>
+                    </form>
+                    <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                  </section>
+                </div>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+              <span class="bottomline">自检、推送日志、更新都打同一份端点，不随窗口宽度变</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot"><strong>本页的排版决策（理由同样写在 <code>&lt;style&gt;</code> 头部）：</strong>内容收到 <code>max-width: 560px</code> 居中，两侧各剩约 154px 留白，表单不拉满。拉满会读起来像后台管理系统；而且错误横幅、自检结果一旦离它们解释的按钮超过一臂，因果就得靠 eyeball。宽屏买到的两件实事：自检结果终于能单行读完；字段说明不再被挤到换行。顶栏内容也跟着收到同一列，只有 chrome 本身整幅出血。</p>
+      <div class="gutter-tag">收束的是内容列，不是 chrome —— 材质条、分隔边始终贴窗口沿</div>
+    </div>
+
+    <!-- ⑥ 900 深色 -->
+    <div class="shot">
+      <span class="device__label">⑥ 同一页 · 深色档 · 900×700 · 错误态 + 自检 warn = 设备离线 + 更新卡</span>
+      <div class="device win--900" data-theme="dark">
+        <div class="win">
+          <div class="win__bar chrome chrome--top">
+            <span class="win__dots" aria-hidden="true"><i class="win__dot"></i><i class="win__dot"></i><i class="win__dot"></i></span>
+            <span class="win__name">dsh</span>
+            <span class="win__geo">900 × 700</span>
+          </div>
+          <div class="win__body">
+            <div class="appbar appbar--inset chrome chrome--top">
+              <span class="appbar__in">
+                <span class="logo" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/><path d="M12 4v16"/></svg>
+                </span>
+                <span class="appname">dsh</span>
+                <span class="ver">v0.1.19</span>
+              </span>
+            </div>
+            <div class="main">
+              <div class="col">
+                <div class="stack">
+                  <h3 class="page-title">连接 dsh</h3>
+                  <p class="page-sub">填公网 Relay 地址与访问 token，即可打开 dsh 界面。</p>
+                  <section class="card">
+                    <form onsubmit="return false">
+                      <div class="frow">
+                        <label class="frow__label" for="d-relay-5">Relay 地址</label>
+                        <div class="frow__control">
+                          <input id="d-relay-5" class="field__input" type="url" value="https://relay.example.com" autocomplete="url" spellcheck="false">
+                        </div>
+                      </div>
+                      <div class="frow">
+                        <label class="frow__label" for="d-token-5"><span>访问 token</span><span class="tag">可选</span></label>
+                        <div class="frow__control">
+                          <div class="field-wrap field-wrap--act">
+                            <input id="d-token-5" class="field__input" type="password" value="••••••••••••" spellcheck="false">
+                            <button class="eye" type="button" aria-label="显示或隐藏 token">
+                              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <!-- 真实文案：main.js probeToken() 收到 401 时写进 #error-text -->
+                      <p class="banner banner--bad" role="alert">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        <span class="banner__text">访问 token 不正确，请检查后重试</span>
+                      </p>
+                      <button class="btn btn--primary submit btn--with-icon" type="submit"><span>连接 dsh</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+                      <div class="diag">
+                        <button class="icon-btn" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+                        <span class="st" data-tone="warn"><i class="dot dot--warn"></i>Relay 可达 118ms · 免 token · ⚠️ 设备离线（tunnel 没连上）</span>
+                      </div>
+                    </form>
+                    <p class="fgroup-foot">地址要带协议（如 https://…）；token 只在连 Relay 时使用，Relay 未开鉴权可留空。</p>
+                  </section>
+                  <section class="card card--panel enter enter--2">
+                    <p class="up-title">发现新版本 v0.1.16</p>
+                    <p class="up-meta">2026-11-03 · 12.4 MB</p>
+                    <p class="up-note">下载完成，完整性校验通过。</p>
+                    <div class="actions">
+                      <button class="icon-btn" type="button" aria-label="跳过此版本" title="跳过此版本"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+                      <button class="btn btn--primary" type="button">立即安装</button>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </div>
+            <div class="bottombar chrome chrome--bottom">
+              <button class="icon-btn" type="button" aria-label="推送日志" title="推送日志"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
+              <span class="bottomline">深色是 palette 的一层子树覆盖，不是另开一页</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="shot__foot">同样按本稿盒高累加：⑤ 的单卡（两字段 + 主按钮 + 单行自检）≈ 440px，可用 ≈ 544px，余量约 100px —— 这才是 560 列买到的东西：自检结果与主按钮同排、字段说明不换行、首屏还有余量。⑥ 把错误横幅 + warn 自检 + 更新卡一起塞进同一个窗口，余量转负（约 −150px），照样要滚：收束宽度解决的是「单卡首屏完整」，不解决「任何状态组合都不滚」。这些数字都是本稿的估算，须以 <code>tauri dev</code> 实测为准。<code>--set-warn</code> 在深色是亮黄，比浅色的橙更跳；这是官方 palette 的既定取舍，稿子不动它。</p>
+    </div>
+  </div>
+
+  <h2 class="sec">连接自检三态 <span class="dim">· 事实来自 main.js runSelfCheck()：Relay 可达性(ms) / 是否要 token / 设备是否在线，三条独立事实</span></h2>
+  <div class="states">
+    <div class="card">
+      <div class="state__row"><span class="dot dot--ok"></span><span class="state__name">OK</span></div>
+      <p class="t-body">三项全真：网络通、地址对、隧道连着。</p>
+      <p class="t-footnote t-secondary m0">Relay 可达 132ms · 需要 token · 设备在线。真实实现给 <code>data-tone="ok"</code>；稿子里绿点 + 绿字 + 三个事实写成短句，色弱截图或高对比模式下仍能读出是哪一态。</p>
+    </div>
+    <div class="card">
+      <div class="state__row"><span class="dot dot--warn"></span><span class="state__name">WARN</span></div>
+      <p class="t-body">网络通、链路断：设备离线不是"失败"。</p>
+      <p class="t-footnote t-secondary m0">Relay 可达 118ms · 免 token · ⚠️ 设备离线（tunnel 没连上）。<strong>现状代码走中性灰</strong>（<code>deviceOnline ? "ok" : undefined</code>），落地清单 A4 要求改 warn。稿子按<strong>应然</strong>画，差异登记在下面的诚实清单第 4 行。</p>
+    </div>
+    <div class="card">
+      <div class="state__row"><span class="dot dot--bad"></span><span class="state__name">BAD</span></div>
+      <p class="t-body">地址 / 网络这一层就没通，别谈 token。</p>
+      <p class="t-footnote t-secondary m0">无法连接 Relay（3021ms）：检查网络与地址；以及 Relay 响应异常：HTTP 404（96ms）。失败文案带<b>数字</b>（耗时 / 状态码），不写「连接失败」了事。</p>
+    </div>
+  </div>
+  <p class="note">三态的判据是三条<strong>独立事实</strong>，不是一个总分：手机不在局域网时，「地址错 / 网络不通」「token 错」「隧道断」在这一行里就能一次分清。<code>--set-warn</code> 有真实落点，不是为了凑齐语义色而存在的装饰档。</p>
+
+  <h2 class="sec">桌面形态要体现的真实差异</h2>
+  <div class="legend">
+    <div class="card">
+      <div class="card__title">窗口顶栏 ≠ 原生标题栏</div>
+      <p class="card__sub">稿里用 <code>.chrome</code> 表达「窗口内沿的材质条」。</p>
+      <ul class="tight">
+        <li>配置没写 <code>decorations</code> → Tauri 默认 <code>true</code>，标题栏由系统画，Web 侧拿不到它。</li>
+        <li>三个点只是示意，颜色只能用令牌灰；要真自绘顶栏得显式 <code>decorations: false</code> + 自定义拖拽区，属<strong>待决</strong>。</li>
+        <li>窗口尺寸写在标题栏右侧（<code>.win__geo</code>），是为了让「420 还是 900」这件事在稿里可查。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card__title">鼠标 hover</div>
+      <p class="card__sub">只在 <code>(hover: hover) and (pointer: fine)</code> 里出现。</p>
+      <div class="demo">
+        <button class="btn btn--primary" type="button">主按钮</button>
+        <button class="btn btn--secondary" type="button">次要</button>
+        <button class="icon-btn" type="button" aria-label="图标动作" title="图标动作"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+        <span class="tappable" role="button" tabindex="0">可点行 · 把鼠标放上来</span>
+      </div>
+      <p class="note"><code>base.css</code> 已给 <code>.btn:hover { opacity: .82 }</code>；本页另给演示元素补了同档反馈。触屏不给 hover，否则样式被钉死在悬停态。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">键盘 Enter 与按钮同路径</div>
+      <p class="card__sub">字段与主按钮在同一个 <code>&lt;form&gt;</code> 里，提交挂在 form 的 submit。</p>
+      <ul class="tight">
+        <li>真实代码已如此（<code>connectForm.addEventListener("submit", …) → submitConnect()</code>），所以<strong>不另加 keydown 处理器</strong> —— 两处监听会双提交。</li>
+        <li>桌面多出 <code>Tab</code> 顺序：地址 → token → 显隐 → 连接 → 自检 → 推送日志，与 DOM 顺序一致，稿子不重排。</li>
+        <li>静态稿里表单是 <code>onsubmit="return false"</code>（稿子不导航）；落地时这条路径由真实 <code>main.js</code> 接管。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card__title">键盘焦点环</div>
+      <p class="card__sub">可聚焦控件在 <code>:focus-visible</code> 下有 2px brand 环 + 2px offset。</p>
+      <div class="demo">
+        <button class="icon-btn focus-demo" type="button" aria-label="连接自检" title="连接自检"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
+        <span class="tappable focus-demo" role="button" tabindex="0">可聚焦行</span>
+        <button class="btn btn--secondary" type="button">无焦点环</button>
+      </div>
+      <p class="note">静态稿没有键盘，所以用 <code>.focus-demo</code> 把环钉出来给人看；实现里它只在键盘路径出现，鼠标点击不打扰（<code>base.css</code> 已覆盖 <code>.btn</code> / <code>.field__input</code>（<code>.row--tappable</code> 曾列在其中，因没有任何页面使用它已被删除））。</p>
+    </div>
+    <div class="card">
+      <div class="card__title">命中区：桌面 28，触屏 44</div>
+      <p class="card__sub">同一组件两档几何，靠显式类名切换，不靠媒体查询猜。</p>
+      <div class="sizing">
+        <span class="sizing__chip"><button class="btn sizing__box" type="button">28</button><span class="t-caption t-tertiary">.btn 桌面默认</span></span>
+        <span class="sizing__chip"><button class="btn btn--touch sizing__box" type="button">44</button><span class="t-caption t-tertiary">.btn--touch 触屏</span></span>
+      </div>
+      <p class="note">本页所有动作按钮用的是桌面档（<code>base.css</code> 的 <code>.btn</code> 下限 28px）。触屏档要<strong>显式加 <code>.btn--touch</code></strong>（<code>min-height: 44px</code>），并在 <code>html</code> 或 <code>.device</code> 上把目标设备属性声明为触屏，闸门才会按 44px 那一档查。本页故意不声明：声明了整页的 28px 都会被误判成失败。（那条规则扫的是全文子串，所以这段说明里也没把那个字面量写全。）</p>
+    </div>
+    <div class="card">
+      <div class="card__title">宽屏断点的落法</div>
+      <p class="card__sub">真实代码 <code>.screen-main</code> 现在是 <code>max-width: 460px</code>，对所有视口生效。</p>
+      <ul class="tight">
+        <li>建议落法：<code>@media (min-width: 700px)</code> 把主区放到 560、卡片内距抬到 20px，chrome 保持整幅出血。</li>
+        <li>判据是「无横向溢出 + 自检结果单行可读 + 更新卡不必滚动才够到按钮」，不是「看起来更大气」。</li>
+        <li>420 档不跟着改：它就是手机排版，宽屏改动不该回头动窄屏。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 class="sec">与真实代码的差异 / 待验证 <span class="dim">· 诚实清单：没测过的一律写「未做」，待决的写清两边取舍，不假装已定</span></h2>
+  <div class="card">
+    <table>
+      <tr><th>#</th><th>项</th><th>真实代码现状</th><th>本稿画法</th><th>性质</th></tr>
+      <tr>
+        <td>1</td><td>桌面窗口实测</td><td>本机 <code>tauri dev</code> <strong>没跑过</strong>；420×760 与 <code>resizable: true</code> 只来自 <code>tauri.conf.json</code></td><td>按配置尺寸画 1:1 稿，几何由配置与 CSS 计算得出</td><td><strong>待验证</strong>：宽屏排版、首屏放得下什么、有没有横向溢出、系统标题栏实际高度（稿里 34px 是估的，Linux/Windows/macOS 还各不相同）都要等真跑起来量。在此之前不许写「已验证」。</td>
+      </tr>
+      <tr>
+        <td>2</td><td>默认窗口宽 420 → 520？</td><td><code>width: 420, height: 760</code>；没写 <code>minWidth</code>、没写 <code>center</code>，起始位置由系统决定</td><td>420 与 900 两档都画了（①②③④ vs ⑤⑥）</td><td><strong>待决，未定</strong>。留 420：与手机共用同一份排版、零断点；代价是 760 高在 800 屏幕上几乎顶满、自检长句无法与按钮同排、更新卡一出现，按本稿盒高算只剩约 20px 余量，字体或标题栏一浮动动作按钮就掉出首屏（须实测）。提 520：首屏能一次看全「字段 + 主按钮 + 单行自检」，也留得下窗口余量；代价是多一档宽度要维护（520 已越过现状 460 的 <code>max-width</code>，必须同时决定断点），且越宽越依赖 <code>max-width</code> 收束，收不住就退化成后台面板。</td>
+      </tr>
+      <tr>
+        <td>3</td><td>深色数值来源</td><td><code>styles.css</code> 走 <code>prefers-color-scheme</code> + 自创深色（画布纯黑、brand 是 systemBlue dark）</td><td>走设计集 <code>tokens.css</code> 的官方 <code>apple-night</code>，挂在 <code>[data-theme="dark"]</code> 子树</td><td><strong>有意偏离</strong>：设计集已把深色定为独立 palette 层并由闸门逐值比对；落地按落地清单 A1/A2 换，稿子不迁就旧值。另外真实切换仍走系统的 <code>prefers-color-scheme</code>，稿里用 <code>data-theme</code> 只是为了并排展示。</td>
+      </tr>
+      <tr>
+        <td>4</td><td>自检「设备离线」的颜色档</td><td><code>deviceOnline ? "ok" : undefined</code> → 离线走<strong>中性灰</strong>；代码注释的理由是「标红会让人以为地址错了」</td><td>画成 <code>--set-warn</code>（② 与 ⑥ 及三态块）</td><td><strong>有意偏离</strong>：中性灰解决了「别误判成失败」，代价是把「网络通、链路断」和「还没查」画成同一档；warn 正好是这条中间事实（落地清单 A4）。原诉求（不标红）保留了。</td>
+      </tr>
+      <tr>
+        <td>5</td><td>主区 <code>max-width</code></td><td>460px，对所有视口生效</td><td>420 档仍是 460 内距那一套；900 档收到 560 居中</td><td>设计决策（规范给的 460–560 区间取上限），落地见 B1。<strong>560 未经真人评审</strong>：觉得挤就退回 460 一档，断点条件不变。</td>
+      </tr>
+      <tr>
+        <td>6</td><td>副标题「在手机上打开」</td><td>0.1.19 手机侧改成「扫桌面上的配对二维码即可连接；也可以手动填…」</td><td><strong>已裁定（0.1.19）</strong>：桌面稿用端无关说法「即可打开 dsh 界面」——桌面没有扫码分组，照抄手机文案会指向一个不存在的按钮</td><td>手机与桌面文案本来就分端（手机提扫码、桌面不提），不再是「一句共用」；本页各帧已按此更新。</td>
+      </tr>
+      <tr>
+        <td>12</td><td><strong>扫码分组的桌面形态（0.1.19）</strong></td><td><code>main.js</code>：<code>!("__TAURI_INTERNALS__" in window) || !/android/i.test(UA)</code> → 整个扫码 <code>section</code> 设 <code>hidden</code></td><td>本页各帧<strong>不画</strong>扫码按钮（真实行为 = 隐藏，不是 disabled）</td><td>桌面没有相机插件，画一个点不了的按钮才是撒谎。手机形态见 <a href="./01-mobile-connect.html">01 页</a> ①/⑨。</td>
+      </tr>
+      <tr>
+        <td>7</td><td>token 显隐按钮尺寸</td><td>40×40（触屏档），<code>input</code> 右侧留 48px</td><td>桌面档收到 32×32，右侧留 44px</td><td><strong>未定</strong>：32 更贴桌面密度，也仍高于「可点元素 ≥28」的桌面下限；但鼠标热区可能显得小气。保持 40 也行，那样右侧留白不用改。需要实测手感再判。</td>
+      </tr>
+      <tr>
+        <td>8</td><td>图标按钮的 44px 命中带</td><td><code>.icon-btn::before</code> 在 <code>base.css</code> 默认档写 <code>height: 44px</code>（触屏下限）</td><td>桌面档已由 <code>base.css</code> 的 <code>[data-target="desktop"] .btn--ghost::before { height: 28px }</code> 覆盖，本页 <code>&lt;html data-target="desktop"&gt;</code> 生效，页内不再各自覆盖</td><td><strong>待决</strong>：桌面档是否把它收到 28px。收了会削弱「视觉小、命中不小」的初衷；不收则桌面上相邻 ghost（自检 / 推送日志）命中带可能互相盖住。要实测两者间距再判 —— 页内覆盖也治不了根，改的是组件层。</td>
+      </tr>
+      <tr>
+        <td>9</td><td>字段说明用哪级灰</td><td>曾矛盾：<code>base.css</code> 的 <code>.field__help</code> 用 <code>--set-text-3</code>，而 <code>docs/设计规范.md</code> 写「成句说明一律 <code>--set-text-2</code>」</td><td><strong>已裁定，按文档方向改组件层</strong>：<code>.field__help</code> / <code>.empty__detail</code> 全部改 <code>--set-text-2</code>，并由闸门新增的「文字色白名单」规则钉住（<code>--set-text-3</code> 与图形语义色一律不许当 <code>color:</code>）</td><td>裁定依据是实测而非偏好：<code>--set-text-3</code> 压白卡 3.62:1、压深色卡 3.36:1，两套主题都不达 AA 的 4.5:1，所以 11–12px 成句说明不能用它。placeholder 仍走派生档 <code>--set-placeholder</code>（≥3:1 即可，它是提示不是内容）。</td>
+      </tr>
+      <tr>
+        <td>10</td><td>更新卡的入场语义</td><td><code>.update-card</code> 用 <code>enter-sheet</code>（从底部升起，语义是底部弹层）</td><td>沿用 <code>enter</code> / <code>enter--2</code> 的 stagger 表达「补了一条事实」</td><td><strong>待评审</strong>：桌面上没有「底部弹层」的空间语义，也许该用 <code>enter-card</code>。这条只在稿子里提出问题，不替实现做决定。</td>
+      </tr>
+      <tr>
+        <td>11</td><td>外壳全景的比例</td><td>无对应实现</td><td>scale(0.5) 画 1280×800，窗内是占位条</td><td><strong>有意的画法</strong>：整块缩放会把 15px 正文变成不可读的 7.5px，所以外壳只表达位置与比例，排版细节交给 1:1 稿。</td>
+      </tr>
+    </table>
+    <p class="note">另外登记两件不属于本页、但会影响它的事：① <code>base.css</code> 里 <code>.card--panel</code> 与 <code>.sheet</code> 写成 <code>box-shadow: var(--set-shadow-lift))</code>，多一个右括号 → 整条声明无效，面板级抬起的阴影实际没生效。本稿用 <code>.bar--panel</code> 自己写了正确声明绕开，<strong>但没动 <code>base.css</code></strong>（任务规定只能创建这一个 html）。② <code>base.css</code> 的 <code>.field__input:focus</code> 用了 <code>color-mix()</code>，而真实 <code>styles.css</code> 文件头明确写了兼容基线「不用 color-mix（Chrome 111+）」；Tauri 侧没问题，WebView 侧要留意 —— 这条由组件层 owner 判，本页照用。</p>
+    <p class="note">复现验证：闸门 <code>node design/tools/check.mjs</code>（本页 0 项失败）；几何判据要靠 <code>tauri dev</code> 在 1280×800 桌面里真开一次窗口，量 420 / 900 两档有无横向溢出与滚动条 —— 本文件没做这一步，所以上表第 1 行写的是「待验证」。</p>
+  </div>
+
+</div>
+</body>
+</html>
