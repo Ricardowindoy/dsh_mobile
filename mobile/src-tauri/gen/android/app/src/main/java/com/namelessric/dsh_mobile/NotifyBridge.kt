@@ -189,6 +189,10 @@ object NotifyBridge {
       .setPriority(NotificationCompat.PRIORITY_HIGH)
       .setCategory(NotificationCompat.CATEGORY_REMINDER)
 
+    // 完成卡每个会话只有一个槽位（插件用稳定 id）：后续更新只替换内容，
+    // 不再响铃/震动，避免「每回一句就叮一下」。
+    if (kind == "done") builder.setOnlyAlertOnce(true)
+
     if (kind == "approval") {
       builder.addAction(0, "允许一次", answerPi(ctx, id, "allowed-once"))
       builder.addAction(0, "拒绝", answerPi(ctx, id, "rejected"))
