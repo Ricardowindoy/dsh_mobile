@@ -3,12 +3,12 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.18",
+            "version": "1.0.19",
             "filename": "app-arm64-release.apk",
-            "size": 7433809,
-            "sha256": "9913463fcb3df50513abe30db0e459c4211bbf23e1225c461efd310b2f12f1e3",
-            "releaseNote": "1.0.18 修复后台收不到通知（SSE 看门狗 + wakelock + 电池优化白名单）",
-            "releaseAt": "2026-11-11",
+            "size": 7450483,
+            "sha256": "b24484a1e55344d638ee13c2476e50352c6fd9485677fccf8e0a4be8faff6a53",
+            "releaseNote": "1.0.19 修复重连重放历史通知（序号游标+过期截断+去重）",
+            "releaseAt": "2026-11-12",
             "force": false
         },
         {
