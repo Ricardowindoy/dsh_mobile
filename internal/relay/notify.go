@@ -19,12 +19,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
 
 const (
 	notifyRingPerDevice = 32
+	// A new subscriber (no `after` cursor) only receives cards younger than
+	// this; older ring entries are history, not something to pop on the phone.
+	notifyBacklogMaxAge = 10 * time.Minute
 	notifyAnswerTTL     = 2 * time.Minute
 	notifyOnlineWindow  = 90 * time.Second
 	notifyLongPollMax   = 25 * time.Second
@@ -57,6 +61,12 @@ type NotifyMessage struct {
 	// Status distinguishes a normal completion from an interrupted/failed
 	// turn on the same `done` kind: completed | interrupted | error | blocked.
 	Status string `json:"status,omitempty"`
+	// Seq is the relay's per-instance monotonic sequence assigned on publish.
+	// The phone sends the last one it saw as `?after=` so a reconnect only
+	// replays what it actually missed (v1.0.19). Without it every reconnect
+	// replayed the whole ring — the "old notifications suddenly flooded in"
+	// regression.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // QuestionAnswerItem mirrors the harness's AskUserQuestionAnswerItem shape:
@@ -85,6 +95,7 @@ type deviceNotify struct {
 
 type notifyHub struct {
 	mu           sync.Mutex
+	seq          uint64
 	devices      map[string]*deviceNotify
 	answers      []notifyAnswer
 	answerCh     chan struct{} // broadcast: new answer available
@@ -112,6 +123,8 @@ func (h *notifyHub) publish(deviceID string, msg NotifyMessage) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	d := h.device(deviceID)
+	h.seq++
+	msg.Seq = h.seq
 	d.ring = append(d.ring, msg)
 	if len(d.ring) > notifyRingPerDevice {
 		d.ring = d.ring[len(d.ring)-notifyRingPerDevice:]
@@ -273,6 +286,17 @@ func (r *Relay) handleNotifyWatch(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "deviceId mismatch", http.StatusForbidden)
 		return
 	}
+	// Resume cursor: only replay cards the phone has not seen. Without `after`
+	// (fresh install / first start) replay only fresh cards, so hours-old ring
+	// entries never surface as a burst of stale notifications.
+	var after uint64
+	hasAfter := false
+	if raw := req.URL.Query().Get("after"); raw != "" {
+		if v, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			after = v
+			hasAfter = true
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -290,7 +314,19 @@ func (r *Relay) handleNotifyWatch(w http.ResponseWriter, req *http.Request) {
 	dev := r.notify.device(d.DeviceID)
 	dev.watchers[ch] = struct{}{}
 	dev.lastSeen = time.Now()
-	backlog := append([]NotifyMessage(nil), dev.ring...)
+	backlog := make([]NotifyMessage, 0, len(dev.ring))
+	cutoff := time.Now().Add(-notifyBacklogMaxAge)
+	for _, m := range dev.ring {
+		if hasAfter {
+			if m.Seq > after {
+				backlog = append(backlog, m)
+			}
+			continue
+		}
+		if time.UnixMilli(m.TS).After(cutoff) {
+			backlog = append(backlog, m)
+		}
+	}
 	r.notify.mu.Unlock()
 	defer func() {
 		r.notify.mu.Lock()

@@ -5,11 +5,13 @@ package relay
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -367,5 +369,112 @@ func TestNotifyAnswerStructured(t *testing.T) {
 		strings.NewReader(`{"id":"q1","answers":[{"id":"scope","selected":["方案 A"]}]}`), nil, cookie)
 	if w.Code != http.StatusGone {
 		t.Fatalf("replayed structured answer = %d, want 410", w.Code)
+	}
+}
+
+// v1.0.19: a reconnect must replay only what the phone missed.
+// Mutation: ignore `after` → red (every reconnect re-delivered the whole ring,
+// which surfaced hours-old cards as a burst on the phone).
+func TestNotifyWatchResumeCursor(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	push := func(id string) {
+		body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"approval","id":"` + id + `"}}`
+		pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
+			map[string]string{"X-DSH-Relay-Token": "admin-sekrit"})
+		if pw.Code != 200 {
+			t.Fatalf("push %s = %d", id, pw.Code)
+		}
+	}
+	push("c1")
+	push("c2")
+
+	readCards := func(query string, want int) []NotifyMessage {
+		t.Helper()
+		srv := httptest.NewServer(h)
+		defer srv.Close()
+		req, _ := http.NewRequest("GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID+query, nil)
+		req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		reader := bufio.NewReader(resp.Body)
+		out := make([]NotifyMessage, 0, want)
+		for len(out) < want {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("SSE read: %v", err)
+			}
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			var m NotifyMessage
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &m); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+
+	first := readCards("", 2)
+	if first[0].ID != "c1" || first[1].ID != "c2" || first[0].Seq == 0 || first[1].Seq <= first[0].Seq {
+		t.Fatalf("initial replay = %+v", first)
+	}
+	// Resume after c1: only c2 comes back.
+	second := readCards("&after="+strconv.FormatUint(first[0].Seq, 10), 1)
+	if second[0].ID != "c2" {
+		t.Fatalf("resume replay = %+v, want c2", second)
+	}
+}
+
+// A fresh subscriber must not receive stale ring entries.
+// Mutation: drop the age cutoff → red (hours-old cards pop on app start).
+func TestNotifyWatchSkipsStaleBacklog(t *testing.T) {
+	r := notifyRelay(t)
+	h := r.Handler()
+	cookie := loginWithCode(t, h, mintCode(t, h))
+	w := do(h, "GET", "/__dsh_tunnel__/pair/self", nil, nil, cookie)
+	var self struct {
+		DeviceID string `json:"deviceId"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &self)
+
+	oldTS := time.Now().Add(-2 * time.Hour).UnixMilli()
+	body := `{"deviceId":"` + self.DeviceID + `","message":{"kind":"done","id":"stale","ts":` + strconv.FormatInt(oldTS, 10) + `}}`
+	if pw := do(h, "POST", "/__dsh_tunnel__/notify/push", strings.NewReader(body),
+		map[string]string{"X-DSH-Relay-Token": "admin-sekrit"}); pw.Code != 200 {
+		t.Fatalf("push stale = %d", pw.Code)
+	}
+
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/__dsh_tunnel__/notify/watch?deviceId="+self.DeviceID, nil)
+	req.Header.Set("X-DSH-Relay-Token", cookie.Value)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return // deadline hit with no data frame: pass
+		}
+		if strings.HasPrefix(line, "data: ") {
+			t.Fatalf("stale card replayed: %s", line)
+		}
 	}
 }

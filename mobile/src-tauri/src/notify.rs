@@ -80,13 +80,22 @@ pub async fn notify_start(
                 return;
             }
         };
-        let url = format!(
+        let base_url = format!(
             "{}/__dsh_tunnel__/notify/watch?deviceId={}",
             conn.relay_url,
             urlencode(&conn.device_id)
         );
         let mut backoff = Duration::from_secs(1);
+        // 断点续传：记住最后收到的 seq，重连时带 ?after=N，relay 只补投之后
+        // 的卡。没有它每次重连都会重放整个环形缓冲（用户实测：隔了两小时
+        // 重连，一堆旧通知同时弹出）。0 = 首次连接，由 relay 按时间窗截断。
+        let mut last_seq: u64 = 0;
         while !stop.load(Ordering::SeqCst) {
+            let url = if last_seq == 0 {
+                base_url.clone()
+            } else {
+                format!("{base_url}&after={last_seq}")
+            };
             match client
                 .get(&url)
                 .header("X-DSH-Relay-Token", &conn.device_token)
@@ -96,7 +105,7 @@ pub async fn notify_start(
             {
                 Ok(resp) if resp.status().is_success() => {
                     backoff = Duration::from_secs(1);
-                    consume_sse(resp, &stop).await;
+                    last_seq = last_seq.max(consume_sse(resp, &stop).await);
                 }
                 Ok(resp) => {
                     eprintln!("[dsh-notify] watch HTTP {}", resp.status());
@@ -137,8 +146,9 @@ fn notify_stop_inner() {
 }
 
 /// SSE 帧解析：`data: {json}\n\n`；`: ping` 注释行忽略。
-async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
+async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) -> u64 {
     let mut buf = String::new();
+    let mut max_seq: u64 = 0;
     // 读空闲看门狗：服务端每 20s 一个 `: ping`，75s 收不到任何字节就判定
     // 这条连接已死（切后台/换网时 NAT 超时很常见，TCP 不会立刻报错，
     // `chunk()` 会永远挂着）。没有它 → 订阅静默失效，只有切回前台才恢复。
@@ -149,7 +159,7 @@ async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
             Ok(r) => r,
             Err(_) => {
                 eprintln!("[dsh-notify] watch idle {}s, reconnecting", IDLE_LIMIT.as_secs());
-                return;
+                return max_seq;
             }
         };
         match chunk_result {
@@ -160,6 +170,11 @@ async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
                     buf.drain(..pos + 2);
                     for line in frame.lines() {
                         if let Some(data) = line.strip_prefix("data: ") {
+                            if let Ok(v) = serde_json::from_str::<Value>(data) {
+                                if let Some(seq) = v.get("seq").and_then(|x| x.as_u64()) {
+                                    max_seq = max_seq.max(seq);
+                                }
+                            }
                             if let Err(e) = push_to_kotlin(data) {
                                 // 卡片送达 relay 不等于手机弹卡：JNI 失败必须可观测。
                                 eprintln!("[dsh-notify] onCard failed: {e}");
@@ -171,10 +186,11 @@ async fn consume_sse(mut resp: reqwest::Response, stop: &Arc<AtomicBool>) {
                     buf.clear(); // 防御：畸形流不无限攒
                 }
             }
-            Ok(None) => return, // 服务端关闭 → 外层重连
-            Err(_) => return,
+            Ok(None) => return max_seq, // 服务端关闭 → 外层重连
+            Err(_) => return max_seq,
         }
     }
+    max_seq
 }
 
 fn urlencode(s: &str) -> String {

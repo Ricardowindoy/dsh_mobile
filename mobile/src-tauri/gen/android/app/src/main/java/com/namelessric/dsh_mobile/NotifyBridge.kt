@@ -47,6 +47,11 @@ object NotifyBridge {
   private val executor = Executors.newSingleThreadExecutor()
   private val cards = ConcurrentHashMap<String, JSONObject>()
 
+  /** 已处理过的卡片（id@ts），LRU 上限 256：relay 重放时兜底去重。 */
+  private val seen = object : LinkedHashMap<String, Boolean>(256, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > 256
+  }
+
   /** 通知链路诊断日志（cacheDir/dsh-notify.log）：只在出问题时看，64KB 封顶。 */
   private fun logLine(ctx: Context, msg: String) {
     try {
@@ -133,6 +138,11 @@ object NotifyBridge {
         val msg = JSONObject(json)
         val id = msg.optString("id")
         if (id.isEmpty()) return@execute
+        // 同一张卡（id 相同、ts 相同）只处理一次。done 卡用稳定 id 覆盖更新，
+        // ts 会变，所以必须带 ts 才能既去重又不挡正常更新。
+        val dedupeKey = "$id@${msg.optLong("ts")}"
+        if (seen.containsKey(dedupeKey)) return@execute
+        seen[dedupeKey] = true
         when (msg.optString("kind")) {
           "retract" -> {
             cards.remove(id)

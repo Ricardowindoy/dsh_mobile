@@ -1,6 +1,6 @@
 [package]
 name = "dsh-mobile"
-version = "1.0.18"
+version = "1.0.19"
 description = "dsh mobile access shell"
 authors = ["NameLess"]
 edition = "2021"
