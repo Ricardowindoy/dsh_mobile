@@ -54,6 +54,16 @@ internal class LoopbackWebViewClient(
         request: WebResourceRequest,
         error: WebResourceError,
     ) {
+        // 某些 WebView 版本对 302 到 loopback 的跳转不会先走
+        // shouldOverrideUrlLoading，而是直接报 ERROR_CONNECT。这里兜底重写，
+        // 让回调仍能走 relay，而不是把 Chromium 错误页留给用户。
+        if (request.isForMainFrame && error.errorCode == WebViewClient.ERROR_CONNECT) {
+            LoopbackOAuthRelay.warm(view.context)
+            LoopbackOAuthRelay.rewrite(request.url)?.let { rewritten ->
+                view.loadUrl(rewritten)
+                return
+            }
+        }
         delegate.onReceivedError(view, request, error)
     }
 }
