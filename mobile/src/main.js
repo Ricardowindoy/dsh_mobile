@@ -297,11 +297,32 @@ function renderVersion(raw) {
   appVersionEl.textContent = `v${v}`;
 }
 
+// 平台/架构判定（更新检查的查询参数，也用于配对设备名）。
+// ⚠️ 顺序要紧：Android 的 UA 里同时含 "Linux"，必须先判 Android，否则会被归类成 linux。
+// 之前这里恒返回 android，桌面端因此会去取 Android 的更新包（APK），是 windows 分支修掉的 bug。
 function platformArch() {
   const ua = navigator.userAgent || "";
-  if (/(aarch64|arm64)/i.test(ua)) return { platform: "android", arch: "arm64" };
-  if (/x86_64|amd64/i.test(ua)) return { platform: "android", arch: "x86_64" };
-  return { platform: "android", arch: "arm64" };
+  const arch = (() => {
+    if (/(aarch64|arm64)/i.test(ua)) return "arm64";
+    if (/(x86_64|amd64|x64|win64|wow64)/i.test(ua)) return "x86_64";
+    return "arm64";
+  })();
+  if (/android/i.test(ua)) return { platform: "android", arch };
+  if (/windows/i.test(ua)) return { platform: "windows", arch: "x86_64" };
+  if (/macintosh|mac os x/i.test(ua)) return { platform: "darwin", arch };
+  if (/linux/i.test(ua)) return { platform: "linux", arch };
+  return { platform: "android", arch };
+}
+
+/** 平台展示名，用于配对时的设备名（如 "Windows 1.0.13"）。 */
+function platformLabel() {
+  switch (platformArch().platform) {
+    case "android": return "Android";
+    case "windows": return "Windows";
+    case "darwin": return "macOS";
+    case "linux": return "Linux";
+    default: return "dsh";
+  }
 }
 
 function formatSize(size) {
@@ -882,7 +903,7 @@ async function redeemPairPayload(payload, via) {
   }
   scanPairLabel.textContent = "配对中…";
   const { invoke } = await import("@tauri-apps/api/core");
-  const name = `Android ${await appVersion()}`;
+  const name = `${platformLabel()} ${await appVersion()}`;
   const redeemed = await invoke("pair_redeem", { relayUrl: payload.relay, code: payload.code, name });
   if (!redeemed?.deviceToken || !redeemed?.ticket) throw new Error("relay 配对响应缺字段");
   relayInput.value = payload.relay;
@@ -1145,16 +1166,21 @@ scanGalleryBtn?.addEventListener("click", scanFromGallery);
 scanPasteBtn?.addEventListener("click", () => { void scanFromPaste(); });
 // 哨兵检查必须在 scanPairBtn 等 const 初始化之后（函数体引用它们）。
 installScanCrashGuard();
-// 非 Android Tauri 环境（浏览器预览/桌面）没有相机插件：隐藏扫码区而不是点了报错。
-// 桌面形态的文案与分区标题也按设计 02 收起来（桌面没有"手动连接（救急）"这一说）。
+// 平台形态（windows 分支改动：桌面不再裁剪界面，与移动端保持一致）：
+//   · 非 Tauri（纯浏览器预览）没有 invoke/Rust 后端 → 整区隐藏；
+//   · Tauri 桌面（Windows/macOS/Linux）→ 保留「相册识别 / 粘贴配对」（两者是纯 WebView
+//     实现，不依赖原生相机插件），只收掉「相机扫码」这一个按钮并改写说明；
+//   · Android → 三种方式全开。
 const isAndroidRuntime = /android/i.test(navigator.userAgent);
-if (!("__TAURI_INTERNALS__" in window) || !isAndroidRuntime) {
+const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+if (!isTauriRuntime) {
   scanPairBtn?.closest("section")?.setAttribute("hidden", "");
-}
-if (!isAndroidRuntime) {
-  const pageSub = document.getElementById("page-sub");
-  if (pageSub) pageSub.textContent = "填公网 Relay 地址与访问 token，即可打开 dsh 界面。";
-  document.querySelector(".group-h")?.setAttribute("hidden", "");
+} else if (!isAndroidRuntime) {
+  scanPairBtn?.setAttribute("hidden", "");
+  const scanNote = document.querySelector(".scan-note");
+  if (scanNote) {
+    scanNote.textContent = "从相册选二维码截图，或粘贴二维码图片 / 配对码，两种方式都可以。";
+  }
 }
 
 // 提交入口统一挂在 form 上：按钮（type=submit）与软键盘回车键走同一条路径，
