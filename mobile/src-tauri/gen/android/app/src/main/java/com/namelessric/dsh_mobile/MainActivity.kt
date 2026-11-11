@@ -112,7 +112,7 @@ class MainActivity : TauriActivity() {
     installLoopbackWebViewClient(webView)
   }
 
-  override fun onNewIntent(intent: android.content.Intent?) {
+  override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
     dispatchSessionIntent(intent)
