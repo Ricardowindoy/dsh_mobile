@@ -9,6 +9,24 @@
 export const GITHUB_REPO = "Ricardowindoy/dsh_mobile";
 export const GITHUB_RELEASES_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
+// Gitee 镜像源：同样是公开仓库。Gitee 的 release API 结构与 GitHub 高度相似
+// （tag_name / assets[].browser_download_url / body / published_at），但
+// latest 端点不是官方的，要用 releases?per_page=1 取最新一条自行判定。
+// ⚠️ Gitee 目前没有发布 release（releases 返回空数组）→ 选中时优雅报「无更新」，
+// 一旦在 Gitee 上发布 Release（资产名同为 app-arm64-release.apk）即可直接生效。
+export const GITEE_REPO = "namelessRic/dsh_mobile";
+export const GITEE_RELEASES_API = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases?page=1&per_page=1`;
+
+// 可选下载源（与 UI 下拉一一对应，也是持久化偏好的合法值）。
+export const UPDATE_SOURCES = ["gitee", "github", "relay"];
+export const DEFAULT_UPDATE_SOURCE = "github";
+
+/** 把任意输入规整成合法源名；不认识的回落到默认值，绝不返回空。 */
+export function normalizeSource(raw) {
+  const s = String(raw ?? "").trim().toLowerCase();
+  return UPDATE_SOURCES.includes(s) ? s : DEFAULT_UPDATE_SOURCE;
+}
+
 /** 去掉 v 前缀，只保留数字段（0.1.19-fix2 → 0.1.19）。 */
 export function normalizeVersion(raw) {
   const s = String(raw ?? "").trim().replace(/^v/i, "");
@@ -71,6 +89,34 @@ export function githubUpdateFromRelease(release, currentVersion) {
     releaseAt: String(release.published_at || "").slice(0, 10),
     force: false,
     source: "github",
+    checksumUrl: sha?.browser_download_url || "",
+  };
+}
+
+/**
+ * 把一个 Gitee release 对象映射成 App 的 update 对象。
+ * Gitee release 结构与 GitHub 基本同构（tag_name / assets / body / created_at），
+ * 但字段名略有差异：资产下载地址在 assets[].browser_download_url，时间用
+ * created_at（无 published_at）。prerelease 用 prerelease 字段。
+ * 返回 null = 不比当前版本新；抛错 = 不可用。调用方据此回退。
+ */
+export function giteeUpdateFromRelease(release, currentVersion) {
+  if (!release || typeof release !== "object") throw new Error("gitee release payload invalid");
+  const tag = String(release.tag_name || release.name || "").trim().replace(/^v/i, "");
+  if (!normalizeVersion(tag)) throw new Error("gitee release tag missing");
+  if (release.prerelease === true) return null;
+  if (!isNewer(tag, currentVersion)) return null;
+  const { apk, sha } = pickReleaseAssets(release);
+  if (!apk || !apk.browser_download_url) throw new Error("gitee release has no APK asset");
+  return {
+    version: tag,
+    url: apk.browser_download_url,
+    sha256: "",
+    size: Number(apk.size) || 0,
+    releaseNote: String(release.body || release.name || "").replace(/\s+/g, " ").trim().slice(0, 400),
+    releaseAt: String(release.created_at || release.published_at || "").slice(0, 10),
+    force: false,
+    source: "gitee",
     checksumUrl: sha?.browser_download_url || "",
   };
 }

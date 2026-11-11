@@ -111,6 +111,15 @@
         <section id="update" class="card update-card" hidden>
           <p class="update-title">发现新版本 <span id="update-version"></span></p>
           <p id="update-meta" class="update-meta"></p>
+          <!-- 下载源选择：用户在 gitee/github/relay 之间切换，偏好被记住 -->
+          <label class="update-source-row" for="update-source">
+            <span class="update-source-label">下载源</span>
+            <select id="update-source" class="update-source-select" name="update-source">
+              <option value="gitee">Gitee</option>
+              <option value="github">GitHub</option>
+              <option value="relay">Relay</option>
+            </select>
+          </label>
           <!-- 下载进度条：下载中可见；indeterminate 态（无 Content-Length）走条纹动画 -->
           <div id="update-progress" class="update-progress" hidden
                role="progressbar" aria-valuemin="0" aria-valuemax="100">

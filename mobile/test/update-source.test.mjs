@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   normalizeVersion, compareVersions, isNewer, pickReleaseAssets,
-  githubUpdateFromRelease, parseChecksum,
+  githubUpdateFromRelease, giteeUpdateFromRelease, parseChecksum,
+  normalizeSource, UPDATE_SOURCES, DEFAULT_UPDATE_SOURCE,
 } from '../src/update-source.js'
 
 test('normalizeVersion strips v prefix and suffixes', () => {
@@ -67,4 +68,41 @@ test('parseChecksum extracts the first 64-hex digest', () => {
   const sha = 'fe92949fc5262758354652a264e1c9a94c1ce16b5934ee0e1bb95f2e42118b98'
   assert.equal(parseChecksum(`${sha}  app-arm64-release.apk\n`), sha)
   assert.equal(parseChecksum('not a checksum'), '')
+})
+
+test('giteeUpdateFromRelease maps a newer Gitee release (created_at + same asset shape)', () => {
+  const r = {
+    tag_name: 'v1.0.20', name: 'v1.0.20', body: 'gitee notes',
+    created_at: '2026-11-11T01:00:00Z',
+    assets: [
+      { name: 'app-arm64-release.apk', browser_download_url: 'https://gitee.com/x/y/releases/download/v1.0.20/app-arm64-release.apk', size: 456 },
+      { name: 'app-arm64-release.apk.sha256', browser_download_url: 'https://gitee.com/x/y/releases/download/v1.0.20/app-arm64-release.apk.sha256' },
+    ],
+  }
+  const u = giteeUpdateFromRelease(r, '1.0.11')
+  assert.equal(u.version, '1.0.20')
+  assert.equal(u.source, 'gitee')
+  assert.equal(u.releaseAt, '2026-11-11')
+  assert.equal(u.size, 456)
+  assert.equal(u.checksumUrl.endsWith('.sha256'), true)
+})
+
+test('giteeUpdateFromRelease: same/older → null, no apk throws, prerelease → null', () => {
+  const mk = (tag, extra = {}) => ({ tag_name: tag, created_at: '2026-11-11T00:00:00Z',
+    assets: [{ name: 'app-arm64-release.apk', browser_download_url: 'u' }], ...extra })
+  assert.equal(giteeUpdateFromRelease(mk('v1.0.11'), '1.0.11'), null)
+  assert.equal(giteeUpdateFromRelease(mk('v1.0.10'), '1.0.11'), null)
+  assert.equal(giteeUpdateFromRelease(mk('v1.0.12', { prerelease: true }), '1.0.11'), null)
+  assert.throws(() => giteeUpdateFromRelease(
+    { tag_name: 'v2.0.0', created_at: 'x', assets: [{ name: 'notes.txt', browser_download_url: 'u' }] }, '1.0.11'),
+    /no APK asset/)
+})
+
+test('normalizeSource keeps valid sources, falls back to default for junk', () => {
+  for (const s of UPDATE_SOURCES) assert.equal(normalizeSource(s), s)
+  assert.equal(normalizeSource('  GITHUB '), 'github')
+  assert.equal(normalizeSource('gitlab'), DEFAULT_UPDATE_SOURCE)
+  assert.equal(normalizeSource(''), DEFAULT_UPDATE_SOURCE)
+  assert.equal(normalizeSource(null), DEFAULT_UPDATE_SOURCE)
+  assert.equal(normalizeSource(undefined), DEFAULT_UPDATE_SOURCE)
 })

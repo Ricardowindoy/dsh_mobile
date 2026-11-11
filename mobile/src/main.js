@@ -9,7 +9,14 @@
 // dist 里会 404（实测），诊断会静默失效。
 import "./diagnostics.js";
 import { log, installDiagnostics, pushLogs, getLogs, persistLogs } from "./logger.js";
-import { GITHUB_RELEASES_API, githubUpdateFromRelease, parseChecksum } from "./update-source.js";
+import {
+  GITHUB_RELEASES_API,
+  GITEE_RELEASES_API,
+  githubUpdateFromRelease,
+  giteeUpdateFromRelease,
+  parseChecksum,
+  normalizeSource,
+} from "./update-source.js";
 import { pctOf, progressLabel } from "./update-progress.js";
 
 const setupEl = document.getElementById("setup");
@@ -32,6 +39,7 @@ const updateLaterEl = document.getElementById("update-later");
 const updateProgressEl = document.getElementById("update-progress");
 const updateProgressBarEl = document.getElementById("update-progress-bar");
 const updateProgressCountEl = document.getElementById("update-progress-count");
+const updateSourceEl = document.getElementById("update-source");
 const pushLogBtn = document.getElementById("push-log");
 const pushLogStatus = document.getElementById("push-log-status");
 const selfCheckBtn = document.getElementById("self-check");
@@ -155,9 +163,36 @@ function setStatusPills(el, items) {
 // 经 JNI FileProvider intent 拉起系统安装器。用户可「跳过此版本」直接进
 // GUI，跳过按版本号记在 localStorage；manifest force=true 不受跳过影响。
 const SKIPPED_KEY = "dsh-mobile-skipped-version";
+// 下载源偏好：用户在下拉里选的 gitee/github/relay。存 localStorage（同步可读，
+// 预检时就要用）；Rust config 里也镜像一份 cfg.updateSource，双写兜底。
+const UPDATE_SOURCE_KEY = "dsh-mobile-update-source";
 let activeUpdate = null;   // checkUpdate 返回的更新信息
 let downloadedApk = null;  // {path,size} 已下载且校验通过的本地 APK
 let lastCfg = null;        // 最近一次连接配置（跳过版本后直接进 GUI 用）
+
+// 读记用户选的下载源（已规整为合法值；无记录回落 github）。
+function getUpdateSource() {
+  try {
+    return normalizeSource(localStorage.getItem(UPDATE_SOURCE_KEY));
+  } catch {
+    return normalizeSource(null);
+  }
+}
+
+// 记住用户选的下载源：localStorage 同步写 + 镜像进 Rust config（异步）。
+function setUpdateSource(source) {
+  const s = normalizeSource(source);
+  try { localStorage.setItem(UPDATE_SOURCE_KEY, s); } catch { /* ignore */ }
+  try {
+    const cfg = (lastCfg && typeof lastCfg === "object") ? lastCfg : loadConfig();
+    if (cfg && typeof cfg === "object") {
+      cfg.updateSource = s;
+      lastCfg = cfg;
+      saveConfig(cfg);
+    }
+  } catch { /* ignore */ }
+  return s;
+}
 
 async function tauriInvoke(cmd, args) {
   const { invoke } = await import("@tauri-apps/api/core");
@@ -274,38 +309,63 @@ function formatSize(size) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// 更新源优先级（用户 2026-11-10 定）：
-//   1) GitHub Release（公开仓库，api.github.com 的 latest）—— 连得上就以它为准；
-//   2) GitHub 不可达/无可用资产 → 回退 relay 的 /__dsh_tunnel__/update/check。
-// GitHub 可达但没有更新时**不再问 relay**（"优先"的含义：GitHub 是权威源）。
-const UPDATE_GITHUB_TIMEOUT_MS = 6000;
+// 更新源（用户 2026-11-11 定）：下拉里三选一 gitee / github / relay，选择持久化。
+//   每个源独立实现「取最新 release → 映射成 update 对象」；取不到更新返回 null，
+//   连不上/载荷异常抛错。checkUpdate(source) 按用户所选源执行，不再隐式回退——
+//   失败就如实报错并提示换源（隐式回退会让用户以为当前源能用）。
+// ⚠️ 曾经的失败模式（设备日志 .diag/app8.log 实证）：选 github 时 release 下载
+//   17s 后「连接更新服务器失败」，一个字节都没到 → 进度条永远不显示。根因是源
+//   不可达，不是进度条代码。现在把源交到用户手里，relay 作可靠兜底。
+const UPDATE_GH_TIMEOUT_MS = 6000;
+const UPDATE_GITEE_TIMEOUT_MS = 8000;
+const UPDATE_RELAY_TIMEOUT_MS = 8000;
 
-async function checkGitHubUpdate() {
-  const current = await appVersion();
-  const resp = await fetchWithTimeout(GITHUB_RELEASES_API, UPDATE_GITHUB_TIMEOUT_MS, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!resp.ok) throw new Error(`GitHub HTTP ${resp.status}`);
-  const update = githubUpdateFromRelease(await resp.json(), current);
-  if (!update) return null;
-  if (update.checksumUrl) {
-    try {
-      const cr = await fetchWithTimeout(update.checksumUrl, UPDATE_GITHUB_TIMEOUT_MS);
-      if (cr.ok) update.sha256 = parseChecksum(await cr.text());
-    } catch { /* 校验文件拿不到：仍可下载，但卡片会如实说"未提供校验" */ }
-  }
+// 展示名（报错/提示文案用）。
+const SOURCE_LABEL = { gitee: "Gitee", github: "GitHub", relay: "Relay" };
+
+// 取校验文件（可选）：拿不到就保留空 sha256，卡片如实说“未提供校验”。
+async function fillChecksum(update, timeoutMs) {
+  if (!update || !update.checksumUrl) return update;
+  try {
+    const cr = await fetchWithTimeout(update.checksumUrl, timeoutMs);
+    if (cr.ok) update.sha256 = parseChecksum(await cr.text());
+  } catch { /* 忽略：仍可下载，仅缺校验 */ }
   delete update.checksumUrl;
   return update;
 }
 
-// 检查 Relay 上的应用更新：GET /__dsh_tunnel__/update/check
+async function checkGitHubUpdate() {
+  const current = await appVersion();
+  const resp = await fetchWithTimeout(GITHUB_RELEASES_API, UPDATE_GH_TIMEOUT_MS, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!resp.ok) throw new Error(`GitHub HTTP ${resp.status}`);
+  const update = githubUpdateFromRelease(await resp.json(), current);
+  return update ? fillChecksum(update, UPDATE_GH_TIMEOUT_MS) : null;
+}
+
+// Gitee：releases?per_page=1 取最新一条（Gitee 无 latest 端点）；空数组=无 release。
+async function checkGiteeUpdate() {
+  const current = await appVersion();
+  const resp = await fetchWithTimeout(GITEE_RELEASES_API, UPDATE_GITEE_TIMEOUT_MS, {
+    headers: { Accept: "application/json" },
+  });
+  if (!resp.ok) throw new Error(`Gitee HTTP ${resp.status}`);
+  const arr = await resp.json();
+  const release = Array.isArray(arr) ? arr[0] : null;
+  if (!release) return null; // 该源暂无 release → 无更新
+  const update = giteeUpdateFromRelease(release, current);
+  return update ? fillChecksum(update, UPDATE_GITEE_TIMEOUT_MS) : null;
+}
+
+// Relay：GET /__dsh_tunnel__/update/check?platform=&arch=&appVersion=
 async function checkRelayUpdate(relay) {
   const version = await appVersion();
   const { platform, arch } = platformArch();
   const url =
     `${relay}/__dsh_tunnel__/update/check` +
     `?platform=${platform}&arch=${arch}&appVersion=${encodeURIComponent(version)}`;
-  const resp = await fetchWithTimeout(url, 8000);
+  const resp = await fetchWithTimeout(url, UPDATE_RELAY_TIMEOUT_MS);
   if (!resp.ok) throw new Error(`检查更新失败（HTTP ${resp.status}）`);
   const body = await resp.json();
   if (body.code === 204 || body.code !== 200 || !body.version || !body.url) {
@@ -315,23 +375,29 @@ async function checkRelayUpdate(relay) {
   return body;
 }
 
-async function checkUpdate(relay) {
+// 按用户所选源检查更新。source 缺省=用户持久化偏好。
+// 返回 {update, detail}：detail 说明「查了哪个源、结果是怎样」，供卡片如实展示。
+async function checkUpdate(relay, sourceOverride) {
+  const source = normalizeSource(sourceOverride || getUpdateSource());
   try {
-    const gh = await checkGitHubUpdate();
-    if (gh === null) {
-      log("update check: source=github, already up to date");
-      return null;
+    let update = null;
+    if (source === "gitee") update = await checkGiteeUpdate();
+    else if (source === "relay") update = await checkRelayUpdate(relay);
+    else update = await checkGitHubUpdate();
+    if (update) {
+      log(`update check: source=${source} v${update.version}`);
+      return { update, detail: `已从 ${SOURCE_LABEL[source]} 发现 v${update.version}` };
     }
-    if (gh) {
-      log(`update check: source=github v${gh.version}`);
-      return gh;
-    }
+    log(`update check: source=${source}, already up to date`);
+    return { update: null, detail: `当前已是最新（源：${SOURCE_LABEL[source]}）` };
   } catch (e) {
-    log(`update check: github unavailable (${errMsg(e)}), falling back to relay`);
+    log(`update check: source=${source} unavailable (${errMsg(e)})`);
+    return {
+      update: null,
+      error: `${SOURCE_LABEL[source]} 不可达：${errMsg(e)}`,
+      source,
+    };
   }
-  const relayUpdate = await checkRelayUpdate(relay);
-  if (relayUpdate) log(`update check: source=relay v${relayUpdate.version}`);
-  return relayUpdate;
 }
 
 /* 更新卡按钮已图形化（用户要求：不用文字按钮）：
@@ -436,9 +502,13 @@ async function startAutoUpdate(update) {
     launchInstaller();
   } catch (e) {
     bootMark("updateDownloadFail");
-    log(`update download fail: ${errMsg(e)}`);
+    const src = (update && update.source) || getUpdateSource();
+    log(`update download fail: source=${src} ${errMsg(e)}`);
     resetUpdateProgress();
-    updateNoteEl.textContent = `自动更新失败：${errMsg(e)}`;
+    // 显式提示换源——这正是设备日志里 GitHub release 连不上（17s 超时、
+    // 一个字节没到所以进度条不显示）时用户需要看的下一步动作。
+    updateNoteEl.textContent =
+      `下载失败（源：${SOURCE_LABEL[src] || src}）：${errMsg(e)}。可在上方切换下载源后重试。`;
     setUpdateButtons("重试下载", () => startAutoUpdate(update), "跳过此版本");
   }
 }
@@ -467,6 +537,47 @@ function presentUpdate(update, cfg) {
   // 浏览器，用户感知就是"打开就闪退"。改为显式点按「下载更新」。
   updateNoteEl.textContent = `发现新版本 v${update.version}，点下方按钮下载安装。`;
   setUpdateButtons("下载更新", () => { void startAutoUpdate(update); }, "跳过此版本");
+}
+
+// 用户在更新卡片里切换下载源：记住偏好并立即用新源重查。
+// 有新版本 → 刷新卡片；无更新 → 收起卡片并进 GUI；源不可达 → 在卡片里如实报错。
+async function recheckWithSource(source, cfg) {
+  const s = setUpdateSource(source);
+  activeUpdate = null;
+  downloadedApk = null;
+  resetUpdateProgress();
+  updateEl.hidden = false;
+  updateVersionEl.textContent = "";
+  updateMetaEl.textContent = "";
+  updateNoteEl.textContent = `正在检查更新（源：${SOURCE_LABEL[s]}）…`;
+  setUpdateButtons(null, null, "跳过此版本");
+  const relay = normalizeRelay((cfg || lastCfg || loadConfig()).relayUrl || "");
+  const res = await checkUpdate(relay, s).catch((e) => ({ update: null, error: errMsg(e), source: s }));
+  if (res && res.update) {
+    presentUpdate(res.update, cfg || lastCfg || loadConfig());
+    return;
+  }
+  if (res && res.error) {
+    updateNoteEl.textContent = `${res.error}。可换一个源再试。`;
+    setUpdateButtons(null, () => { void recheckWithSource(updateSourceEl.value, cfg); }, "跳过此版本");
+    return;
+  }
+  // 该源暂无更新：收起卡片直接进 GUI。
+  log(`update check: source=${s}, already up to date (from switch)`);
+  updateEl.hidden = true;
+  const base = cfg || lastCfg || loadConfig();
+  if (base && base.relayUrl) void connect(base, true);
+}
+
+// 绑定下载源下拉：change 时记住偏好并按新源重查（仅在更新卡片可见时有意义）。
+function bindUpdateSource() {
+  if (!updateSourceEl) return;
+  updateSourceEl.value = getUpdateSource();
+  updateSourceEl.addEventListener("change", () => {
+    const s = updateSourceEl.value;
+    log(`update source switched to ${s}`);
+    void recheckWithSource(s, lastCfg);
+  });
 }
 
 // A dsh page may itself be served as a PWA with a service worker; if one is
@@ -1068,6 +1179,9 @@ connectForm.addEventListener("submit", (event) => {
   submitConnect();
 });
 
+// 下载源下拉（gitee/github/relay）：绑定并回填已保存偏好。
+bindUpdateSource();
+
 // token 明文/密文切换
 tokenToggleEl.addEventListener("click", () => {
   const show = tokenInput.type === "password";
@@ -1143,11 +1257,13 @@ async function boot() {
     // 并行执行更新检查与 token 预检（两个独立控制面请求，串行会多
     // 一个 RTT；移动网络每 RTT 几百 ms）。
     const relay = normalizeRelay(cfg.relayUrl);
-    const updateP = checkUpdate(relay).catch(() => null);
+    // 下拉回填用户上次选的源（cfg.updateSource 优先，其次 localStorage）。
+    if (updateSourceEl) updateSourceEl.value = normalizeSource(cfg.updateSource || getUpdateSource());
+    const updateP = checkUpdate(relay).catch((e) => ({ update: null, error: errMsg(e) }));
     const probeP = cfg.deviceToken
       ? probeDeviceToken(relay, cfg.deviceToken)
       : cfg.accessToken ? probeToken(relay, cfg.accessToken) : Promise.resolve(null);
-    Promise.all([updateP, probeP]).then(([update, probeErr]) => {
+    Promise.all([updateP, probeP]).then(([check, probeErr]) => {
       bootMark("preflightDone");
       if (probeErr) {
         // token 有问题：优先报错，停在设置页。
@@ -1155,10 +1271,11 @@ async function boot() {
         errorTextEl.textContent = probeErr;
         return;
       }
+      const update = check && check.update;
       if (!update) {
-        // v1.0.10 起恢复自动进入 GUI：此前"打开就切后台"的根因是
-        // notify_start 的 JNI pending exception（已在 v1.0.10 修复），
-        // 与自动导航无关。v1.0.9 临时改成手动，现在恢复原行为。
+        // 源不可达时如实提示（不给用户「一切正常」的假象），但照常进 GUI；
+        // 用户可在更新卡片里换源重试。无更新/正常则静默进 GUI。
+        if (check && check.error) log(`preflight: update source error — ${check.error}`);
         log("preflight ok, auto connect");
         connect(cfg, true);
         return;

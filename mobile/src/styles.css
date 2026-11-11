@@ -758,6 +758,41 @@ main {
 .update-actions .icon-btn { width: auto; min-width: var(--set-tap); height: auto; min-height: var(--set-tap); }
 .update-actions .btn-primary { margin-top: 0; flex: 1; }
 
+/* ---------- 下载源选择：一行 label + 原生 select ---------- */
+.update-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.update-source-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--set-text-2);
+}
+.update-source-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 30px 0 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--set-text);
+  border-radius: var(--set-radius-sm);
+  border: 1px solid var(--set-line);
+  background-color: var(--set-surface-2);
+  /* 自绘下拉箭头（避免原生箭头在深色模式下发黑不协调） */
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8a8f' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.update-source-select:focus-visible {
+  outline: 2px solid var(--set-brand);
+  outline-offset: 2px;
+}
+
 /* ---------- 下载进度条：只有 transform 在动 ----------
    定态 = scaleX(0..1)；不定态（服务器没给 Content-Length）= 条纹平移。
    减弱动态时条纹停成 50% 常亮（见下方 media query），不闪也不装死。 */
