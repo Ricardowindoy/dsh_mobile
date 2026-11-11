@@ -776,7 +776,13 @@ async function connect(cfg, skipProbe = false) {
 
   // Navigate immediately; the service-worker sweep runs in parallel and
   // never blocks entering the GUI.
-  window.location.replace(relay + next);
+  // 从通知点进来的冷启动：取走待跳转会话，拼成 hash 带给 GUI 的客户端插件。
+  let deepLink = "";
+  try {
+    const pendingSession = await tauriInvoke("take_pending_session");
+    if (pendingSession) deepLink = `#session=${encodeURIComponent(pendingSession)}`;
+  } catch { /* 非 Tauri 环境或命令不可用：忽略深链 */ }
+  window.location.replace(relay + next + deepLink);
   clearServiceWorkers();
 }
 

@@ -43,6 +43,8 @@ object NotifyBridge {
   private const val EXTRA_DECISION = "decision"
   /** Structured question answer as JSON: [{"id":"scope","selected":["方案 A"]}]. */
   private const val EXTRA_ANSWERS = "answersJson"
+  /** 点卡片要跳转的会话 id（MainActivity 读取后交给 Rust/客户端插件）。 */
+  const val EXTRA_SESSION = "sessionId"
 
   private val executor = Executors.newSingleThreadExecutor()
   private val cards = ConcurrentHashMap<String, JSONObject>()
@@ -236,6 +238,7 @@ object NotifyBridge {
 
     val open = Intent(ctx, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      putExtra(EXTRA_SESSION, msg.optString("sessionId"))
     }
     val openPi = PendingIntent.getActivity(ctx, id.hashCode(), open,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)

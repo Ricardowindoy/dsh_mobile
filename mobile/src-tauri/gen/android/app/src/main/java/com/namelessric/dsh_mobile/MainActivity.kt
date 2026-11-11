@@ -24,6 +24,14 @@ class MainActivity : TauriActivity() {
 
     @JvmStatic
     external fun nativeInitBridge(activity: Activity)
+
+    /** 记录待跳转会话（app 尚未进 GUI 时由 setup 页 take 走）。 */
+    @JvmStatic
+    external fun nativeSetPendingSession(sessionId: String)
+
+    /** 当前 WebView（onWebViewCreate 拿到的实例），热启动跳转用。 */
+    @Volatile
+    var webViewRef: WebView? = null
   }
 
   /**
@@ -64,6 +72,8 @@ class MainActivity : TauriActivity() {
     // 把 Activity 递给 Rust（JNI 桥入口：自动更新 + 状态栏主题切换）
     nativeInitBridge(this)
     Log.i("dsh-diag", "nativeInitBridge done +${System.currentTimeMillis() - t0}ms")
+    // 从通知点进来的冷启动：把要跳转的会话交给 Rust，setup 页导航时取走。
+    dispatchSessionIntent(intent)
     // 初始主题 = 连接页（跟随系统明暗）：targetSdk 36 强制 edge-to-edge，
     // 状态栏条带是 decorView 的 padding 区，颜色随 decorView 背景走。
     // 底色取 @color/canvas（values / values-night 各一份），必须与
@@ -96,9 +106,39 @@ class MainActivity : TauriActivity() {
    */
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
+    webViewRef = webView
     // ⚠️ wry 的 JNI 顺序是 setWebView（本回调）→ setWebViewClient；
     // 用带重试的延迟安装，等 RustWebViewClient 装好后再包一层。
     installLoopbackWebViewClient(webView)
+  }
+
+  override fun onNewIntent(intent: android.content.Intent?) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    dispatchSessionIntent(intent)
+  }
+
+  /**
+   * 点通知跳到对应会话。
+   *
+   * 冷启动（WebView 还没进 GUI）：写进 Rust 的 pending 槽，setup 页在
+   * `connect()` 导航时把它拼成 `#session=<id>` 带过去。
+   * 热启动（已经在 GUI）：直接改 `location.hash`，不重载页面；客户端插件
+   * 监听 hashchange 调 `uiWorkspace.openSession()`。
+   */
+  private fun dispatchSessionIntent(intent: android.content.Intent?) {
+    val sessionId = intent?.getStringExtra(NotifyBridge.EXTRA_SESSION)?.trim().orEmpty()
+    if (sessionId.isEmpty()) return
+    intent?.removeExtra(NotifyBridge.EXTRA_SESSION)
+    val wv = webViewRef
+    if (wv != null && (wv.url?.startsWith("http") == true)) {
+      val safe = sessionId.replace("'", "")
+      wv.post { wv.evaluateJavascript("location.hash='session=$safe'", null) }
+      Log.i("dsh-diag", "deep link (warm) session=$sessionId")
+    } else {
+      nativeSetPendingSession(sessionId)
+      Log.i("dsh-diag", "deep link (cold) session=$sessionId")
+    }
   }
 
   // ---- 诊断：主线程看门狗 ----

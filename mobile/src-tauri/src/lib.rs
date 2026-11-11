@@ -21,7 +21,35 @@ mod loopback_oauth;
 #[cfg(target_os = "android")]
 mod notify;
 
+/// 点通知要跳转的会话 id。Kotlin 在主线程把它塞进来，setup 页导航前用
+/// `take_pending_session` 取走（取走即清空，避免下次启动重复跳转）。
+static PENDING_SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// 取走待跳转的会话 id（读取即清空）。
+#[tauri::command]
+fn take_pending_session() -> Option<String> {
+    PENDING_SESSION.lock().ok().and_then(|mut guard| guard.take())
+}
+
+/// Kotlin 的 `MainActivity.nativeSetPendingSession`（JNI）：记录待跳转会话。
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_namelessric_dsh_1mobile_MainActivity_nativeSetPendingSession(
+    mut env: jni::JNIEnv,
+    _class: jni::objects::JClass,
+    session: jni::objects::JString,
+) {
+    let Ok(sid) = env.get_string(&session).map(|s| s.to_string_lossy().into_owned()) else { return };
+    if sid.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = PENDING_SESSION.lock() {
+        *guard = Some(sid);
+    }
+}
+
 use serde_json::{json, Value};
+use std::sync::Mutex;
 use std::time::Instant;
 use tauri::Manager;
 
@@ -45,7 +73,8 @@ pub fn run() {
         pair_redeem,
         pair_refresh,
         read_clipboard,
-        read_crash_log
+        read_crash_log,
+        take_pending_session
     ]);
     #[cfg(target_os = "android")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -60,7 +89,8 @@ pub fn run() {
         read_clipboard,
         read_crash_log,
         notify::notify_start,
-        notify::notify_stop
+        notify::notify_stop,
+        take_pending_session
     ]);
     builder
         // loopback 插件暂不注册（白屏根因，见 loopback_oauth.rs 顶部说明）。
