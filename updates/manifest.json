@@ -3,11 +3,11 @@
         {
             "platform": "android",
             "arch": "arm64",
-            "version": "1.0.15",
+            "version": "1.0.16",
             "filename": "app-arm64-release.apk",
-            "size": 7430593,
-            "sha256": "a72ab1ac6cde22ae08868d214104d39354eec187ce561384bb75b801649d22fa",
-            "releaseNote": "1.0.15 提问一键作答、完成通知（带会话标题）、通知订阅前台常驻",
+            "size": 7433202,
+            "sha256": "64629d777bbaebef2e9d7adfb14cfe651ed4678c28f2cdddd0cbe69fe2cb15b0",
+            "releaseNote": "1.0.16 通知体验修复：中断/出错通知、一句话摘要、每会话一个通知槽",
             "releaseAt": "2026-11-11",
             "force": false
         },
