@@ -1,5 +1,7 @@
 # 审批推送（approval-push）
 
+> v2（1.0.22）：id 幂等 / slot 展示 / 设备唯一绑定 / ack 闭环；协议只服务 v2。
+
 把 DSH 的审批请求/提问推送到已配对手机的通知卡片。语义借自上游
 `@linxin666/dsh-remote-bridge`（claim / fail-closed / 重连重放），落在我们
 自己的 relay 通知面（`/__dsh_tunnel__/notify/*`）上。
