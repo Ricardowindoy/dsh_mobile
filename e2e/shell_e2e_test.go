@@ -124,9 +124,9 @@ func TestShellServedAtRootWithTwoNodes(t *testing.T) {
 	if !strings.Contains(hdr.Get("Content-Type"), "text/html") {
 		t.Fatalf("content-type=%q", hdr.Get("Content-Type"))
 	}
-	// 壳页只保留 iframe 舞台 + __dshShell 桥；节点切换 UI 全在插件里
-	// （2026-11-10 用户定：红圈内的壳页自带下拉删除）。
-	for _, marker := range []string{"default-node/watch", "/d/", "iframe", "__dshShell"} {
+	// 壳页只保留 iframe 舞台 + __dshShell 桥 + 失败恢复卡；正常浏览的节点
+	// 切换 UI 全在插件里（2026-11-10 用户定：红圈内的壳页自带下拉删除）。
+	for _, marker := range []string{"default-node/watch", "/d/", "iframe", "__dshShell", `id="recover"`, `id="recover-list"`, "节点无法启动"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("shell page missing %q", marker)
 		}
@@ -138,6 +138,35 @@ func TestShellServedAtRootWithTwoNodes(t *testing.T) {
 	}
 	if strings.Contains(body, "GUI of node-a") {
 		t.Fatal("root served a node GUI instead of the shell")
+	}
+}
+
+// TestShellBrokenNodeStillServesShell：设备隧道在线但本地 dsh 挂了时，根路径
+// 仍必须是壳页（否则手机只会看到裸的 device stream rejected，连切回入口都没有）。
+// 回归的是 2026-11-13 实测死锁：默认节点起不来 → 插件下拉不存在 → 无法切回。
+func TestShellBrokenNodeStillServesShell(t *testing.T) {
+	a := startNodeDsh(t, "node-a")
+	base, ws, _ := startShellRelay(t, map[string]string{"ta": "node-a", "tb": "node-b"}, "")
+
+	// A definitely-closed port: the tunnel stays paired (device "online") but
+	// every stream open ends in 502 device stream rejected.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := ln.Addr().String()
+	_ = ln.Close()
+
+	startTunnel(t, ws, "node-a", "ta", strings.TrimPrefix(a.URL, "http://"))
+	startTunnel(t, ws, "node-b", "tb", deadAddr)
+
+	status, body, _ := getBody(t, base+"/", nil)
+	if status != 200 || !strings.Contains(body, `id="recover-list"`) {
+		t.Fatalf("broken node must still serve shell with recovery UI: status=%d body=%q", status, body[:min(200, len(body))])
+	}
+	st, bd, _ := getBody(t, base+"/d/node-b/", nil)
+	if st != http.StatusBadGateway || !strings.Contains(bd, "device stream rejected") {
+		t.Fatalf("broken node stream = %d %q, want 502 device stream rejected", st, bd)
 	}
 }
 
