@@ -12,8 +12,16 @@
  * 02 · 桌面 App 窗口（同一份连接页的宽屏形态）
  * -----------------------------------------------------------------------------
  * 事实来源（不是凭印象，逐条可查）：
- *   src-tauri/tauri.conf.json → windows[0] = { title:"dsh", width:420, height:760,
- *     resizable:true, fullscreen:false }；没写 decorations → Tauri 默认 true（系统标题栏）。
+ *   src-tauri/tauri.{windows,linux,macos}.conf.json → windows[0] = { title:"dsh",
+ *     width:960, height:720, minWidth:640, minHeight:480, resizable:true,
+ *     maximizable:true, minimizable:true, center:true, fullscreen:false }；
+ *     没写 decorations → Tauri 默认 true（系统标题栏）。
+ *   src-tauri/tauri.conf.json（主配置，Android/iOS 走这份）→ 420×760，手机排版不变。
+ *   ⚠️ 2026-11-16 用户报「桌面端没有最大化按钮」：根因是桌面平台配置曾写
+ *     maximizable:false —— tao 只在 MAXIMIZABLE 置位时才加 WS_MAXIMIZEBOX
+ *     （tao-0.37.2/.../windows/window_state.rs:247），所以系统标题栏根本没有那一格。
+ *     同一份配置还把窗口钉在 420 宽 → 内嵌 GUI 视口 < 宿主抽屉断点 768 → 整体渲染成
+ *     手机档。现已改为 960×720 + maximizable:true。
  *   mobile/src/index.html + styles.css → 三段式（app-bar / screen-main / bottom-bar），
  *     主区 max-width 现在对**所有视口**都是 460px；自检文案与更新卡文案见 main.js。
  *
@@ -240,7 +248,7 @@ ul.tight li + li { margin-top: 4px; }
 <div class="wrap">
 
   <h1 class="t-large-title">02 · 桌面 App 窗口</h1>
-  <p class="lede">同一个连接页的宽屏形态。事实基线：<code>src-tauri/tauri.conf.json</code> 里窗口默认 <code>420×760</code>、<code>resizable: true</code>、没写 <code>decorations</code>（即 Tauri 默认 = 系统标题栏）。桌面不是"手机版放大"，它多出三件真实的事：窗口可被拉宽、鼠标有 hover、键盘 Enter 必须与按钮走同一条提交路径。<strong>0.1.19 起手机侧多了「扫码配对」主路径，但桌面看不到它</strong>：真实代码按 <code>navigator.userAgent</code> 非 Android 即隐藏整个扫码分组（桌面没有相机插件），所以本页各帧保持手动表单形态——这不是漏画，是真实行为。</p>
+  <p class="lede">同一个连接页的宽屏形态。事实基线：桌面平台配置 <code>src-tauri/tauri.{windows,linux,macos}.conf.json</code> 里窗口默认 <code>960×720</code>、<code>minWidth 640</code>、<code>resizable: true</code>、<code>maximizable: true</code>、<code>center: true</code>，没写 <code>decorations</code>（即 Tauri 默认 = 系统标题栏）；主配置 <code>tauri.conf.json</code> 的 <code>420×760</code> 是手机排版，桌面不再共用它。桌面不是"手机版放大"，它多出三件真实的事：窗口可被拉宽、鼠标有 hover、键盘 Enter 必须与按钮走同一条提交路径。<strong>0.1.19 起手机侧多了「扫码配对」主路径，桌面只保留其中两种</strong>：桌面没有相机插件，「相机扫码」按钮被收掉，但「相册识别 / 粘贴配对」是纯 WebView 实现、桌面照样能用（真实代码按 <code>navigator.userAgent</code> 非 Android 只隐藏那一个按钮）。<strong>2026-11-16 修</strong>：桌面曾被钉在 420 宽且 <code>maximizable:false</code> —— 前者让内嵌 GUI 落进宿主手机抽屉档，后者让系统标题栏没有最大化按钮。</p>
 
   <div class="claims">
     <div class="card claim enter">
@@ -741,6 +749,7 @@ ul.tight li + li { margin-top: 4px; }
       <ul class="tight">
         <li>配置没写 <code>decorations</code> → Tauri 默认 <code>true</code>，标题栏由系统画，Web 侧拿不到它。</li>
         <li>三个点只是示意，颜色只能用令牌灰；要真自绘顶栏得显式 <code>decorations: false</code> + 自定义拖拽区，属<strong>待决</strong>。</li>
+        <li><strong>系统标题栏自带最小化/最大化/关闭</strong>，不需要自绘 —— 但前提是窗口<strong>可最大化</strong>：<code>maximizable:false</code> 会让 tao 根本不加 <code>WS_MAXIMIZEBOX</code>，那一格就不存在（2026-11-16 用户报「桌面端没有最大化按钮」的根因）。</li>
         <li>窗口尺寸写在标题栏右侧（<code>.win__geo</code>），是为了让「420 还是 900」这件事在稿里可查。</li>
       </ul>
     </div>
@@ -799,10 +808,10 @@ ul.tight li + li { margin-top: 4px; }
     <table>
       <tr><th>#</th><th>项</th><th>真实代码现状</th><th>本稿画法</th><th>性质</th></tr>
       <tr>
-        <td>1</td><td>桌面窗口实测</td><td>本机 <code>tauri dev</code> <strong>没跑过</strong>；420×760 与 <code>resizable: true</code> 只来自 <code>tauri.conf.json</code></td><td>按配置尺寸画 1:1 稿，几何由配置与 CSS 计算得出</td><td><strong>待验证</strong>：宽屏排版、首屏放得下什么、有没有横向溢出、系统标题栏实际高度（稿里 34px 是估的，Linux/Windows/macOS 还各不相同）都要等真跑起来量。在此之前不许写「已验证」。</td>
+        <td>1</td><td>桌面窗口实测</td><td>本机 <code>tauri dev</code> <strong>没跑过</strong>（<code>cargo check</code> 卡在宿主依赖 glib 2.66 &lt; 2.70、缺 webkit2gtk-4.1，与本次改动无关）；960×720 / <code>maximizable:true</code> 来自平台配置，已用<b>真实 tauri-utils 的 <code>read_from</code></b> 验证「平台配置确实被合并」</td><td>按配置尺寸画 1:1 稿，几何由配置与 CSS 计算得出</td><td><strong>待验证</strong>：宽屏排版、首屏放得下什么、有没有横向溢出、系统标题栏实际高度（稿里 34px 是估的，Linux/Windows/macOS 还各不相同）都要等真跑起来量。连接页自己的几何已在真实浏览器量过（<code>.verify-ui/measure-desktop.mjs</code>：900×700 与 1280×800 主区 560 居中、行 34px、零溢出）。在此之前不许写「已验证」。</td>
       </tr>
       <tr>
-        <td>2</td><td>默认窗口宽 420 → 520？</td><td><code>width: 420, height: 760</code>；没写 <code>minWidth</code>、没写 <code>center</code>，起始位置由系统决定</td><td>420 与 900 两档都画了（①②③④ vs ⑤⑥）</td><td><strong>待决，未定</strong>。留 420：与手机共用同一份排版、零断点；代价是 760 高在 800 屏幕上几乎顶满、自检长句无法与按钮同排、更新卡一出现，按本稿盒高算只剩约 20px 余量，字体或标题栏一浮动动作按钮就掉出首屏（须实测）。提 520：首屏能一次看全「字段 + 主按钮 + 单行自检」，也留得下窗口余量；代价是多一档宽度要维护（520 已越过现状 460 的 <code>max-width</code>，必须同时决定断点），且越宽越依赖 <code>max-width</code> 收束，收不住就退化成后台面板。</td>
+        <td>2</td><td>默认窗口宽：已裁定</td><td><strong>已定（2026-11-16）</strong>：桌面走平台配置 <code>960×720</code>（<code>minWidth 640 / minHeight 480 / center / maximizable:true</code>）；手机走主配置 <code>420×760</code> 不动</td><td>稿里画的是 420×760 与 900×700 两档（作为排版参照，非当前窗口尺寸）</td><td><strong>已裁定</strong>。选 960 而不是 520 的理由：520 仍小于宿主抽屉断点 768，内嵌 GUI 会落进手机档 —— 桌面必须是桌面。三平台各一份平台配置，<code>tauri.*.conf.json</code> 用 RFC 7396 merge-patch 合并（数组整体替换，所以平台配置的 <code>app.windows</code> 是完整一份）。</td>
       </tr>
       <tr>
         <td>3</td><td>深色数值来源</td><td><code>styles.css</code> 走 <code>prefers-color-scheme</code> + 自创深色（画布纯黑、brand 是 systemBlue dark）</td><td>走设计集 <code>tokens.css</code> 的官方 <code>apple-night</code>，挂在 <code>[data-theme="dark"]</code> 子树</td><td><strong>有意偏离</strong>：设计集已把深色定为独立 palette 层并由闸门逐值比对；落地按落地清单 A1/A2 换，稿子不迁就旧值。另外真实切换仍走系统的 <code>prefers-color-scheme</code>，稿里用 <code>data-theme</code> 只是为了并排展示。</td>
@@ -817,7 +826,7 @@ ul.tight li + li { margin-top: 4px; }
         <td>6</td><td>副标题「在手机上打开」</td><td>0.1.19 手机侧改成「扫桌面上的配对二维码即可连接；也可以手动填…」</td><td><strong>已裁定（0.1.19）</strong>：桌面稿用端无关说法「即可打开 dsh 界面」——桌面没有扫码分组，照抄手机文案会指向一个不存在的按钮</td><td>手机与桌面文案本来就分端（手机提扫码、桌面不提），不再是「一句共用」；本页各帧已按此更新。</td>
       </tr>
       <tr>
-        <td>12</td><td><strong>扫码分组的桌面形态（0.1.19）</strong></td><td><code>main.js</code>：<code>!("__TAURI_INTERNALS__" in window) || !/android/i.test(UA)</code> → 整个扫码 <code>section</code> 设 <code>hidden</code></td><td>本页各帧<strong>不画</strong>扫码按钮（真实行为 = 隐藏，不是 disabled）</td><td>桌面没有相机插件，画一个点不了的按钮才是撒谎。手机形态见 <a href="./01-mobile-connect.html">01 页</a> ①/⑨。</td>
+        <td>12</td><td><strong>扫码分组的桌面形态</strong></td><td><code>main.js</code>（2026-11-16 改）：非 Tauri（浏览器预览）→ 整个扫码 <code>section</code> 隐藏；Tauri 桌面 → <strong>只隐藏「相机扫码」按钮</strong>，保留「相册识别 / 粘贴配对」（纯 WebView 实现，不依赖原生相机插件）并改写说明文字</td><td>本页各帧<strong>不画</strong>「相机扫码」按钮（真实行为 = 隐藏，不是 disabled）；相册/粘贴在桌面可用，但本稿聚焦手填表单路径故未画</td><td><strong>已随实现更新</strong>。桌面没有相机插件，画一个点不了的按钮才是撒谎；但反过来把两种纯 WebView 的方式也收掉，是把能用的功能一起删了。手机形态见 <a href="./01-mobile-connect.html">01 页</a> ①/⑨。</td>
       </tr>
       <tr>
         <td>7</td><td>token 显隐按钮尺寸</td><td>40×40（触屏档），<code>input</code> 右侧留 48px</td><td>桌面档收到 32×32，右侧留 44px</td><td><strong>未定</strong>：32 更贴桌面密度，也仍高于「可点元素 ≥28」的桌面下限；但鼠标热区可能显得小气。保持 40 也行，那样右侧留白不用改。需要实测手感再判。</td>

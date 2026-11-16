@@ -17,6 +17,7 @@ import {
   parseChecksum,
   normalizeSource,
   pickLatestGiteeRelease,
+  platformArchFromUA,
 } from "./update-source.js";
 import { pctOf, progressLabel } from "./update-progress.js";
 
@@ -298,11 +299,22 @@ function renderVersion(raw) {
   appVersionEl.textContent = `v${v}`;
 }
 
+// 更新目标平台：不能像旧版那样一律返回 android，否则桌面端会向 relay 要
+// android/arm64 清单，并在 GitHub release 里挑到 Android APK（2026-11-12 实测）。
 function platformArch() {
-  const ua = navigator.userAgent || "";
-  if (/(aarch64|arm64)/i.test(ua)) return { platform: "android", arch: "arm64" };
-  if (/x86_64|amd64/i.test(ua)) return { platform: "android", arch: "x86_64" };
-  return { platform: "android", arch: "arm64" };
+  return platformArchFromUA(navigator.userAgent || "");
+}
+
+/** 平台展示名，用于配对时的设备名（如 "Windows 1.0.13"）。 */
+function platformLabel() {
+  switch (platformArch().platform) {
+    case "android": return "Android";
+    case "windows": return "Windows";
+    case "macos": return "macOS";
+    case "linux": return "Linux";
+    case "ios": return "iOS";
+    default: return "dsh";
+  }
 }
 
 function formatSize(size) {
@@ -891,7 +903,7 @@ async function redeemPairPayload(payload, via) {
   }
   scanPairLabel.textContent = "配对中…";
   const { invoke } = await import("@tauri-apps/api/core");
-  const name = `Android ${await appVersion()}`;
+  const name = `${platformLabel()} ${await appVersion()}`;
   const redeemed = await invoke("pair_redeem", { relayUrl: payload.relay, code: payload.code, name });
   if (!redeemed?.deviceToken || !redeemed?.ticket) throw new Error("relay 配对响应缺字段");
   relayInput.value = payload.relay;
@@ -1154,16 +1166,26 @@ scanGalleryBtn?.addEventListener("click", scanFromGallery);
 scanPasteBtn?.addEventListener("click", () => { void scanFromPaste(); });
 // 哨兵检查必须在 scanPairBtn 等 const 初始化之后（函数体引用它们）。
 installScanCrashGuard();
-// 非 Android Tauri 环境（浏览器预览/桌面）没有相机插件：隐藏扫码区而不是点了报错。
-// 桌面形态的文案与分区标题也按设计 02 收起来（桌面没有"手动连接（救急）"这一说）。
+// 平台形态（桌面 ≠ 手机排版）：
+//   · 非 Tauri（纯浏览器预览）没有 invoke/Rust 后端 → 整个扫码分区隐藏；
+//   · Tauri 桌面（Windows/macOS/Linux）→ 保留「相册识别 / 粘贴配对」（两者是纯
+//     WebView 实现，不依赖原生相机插件），只收掉「相机扫码」这一个按钮并改写
+//     说明文字 —— 桌面没有相机插件，画一个点不了的按钮才是撒谎；
+//   · Android → 三种方式全开。
+// 桌面形态不再改写副标题、不再隐藏「手动连接（救急）」分区标题：桌面与移动端
+// 界面保持一致（windows 分支 2026-11-11 定的口径）。
 const isAndroidRuntime = /android/i.test(navigator.userAgent);
-if (!("__TAURI_INTERNALS__" in window) || !isAndroidRuntime) {
+const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+if (!isTauriRuntime) {
+  // 浏览器预览：没有 Rust 后端，扫码走不通，整区隐藏而不是点了报错。
   scanPairBtn?.closest("section")?.setAttribute("hidden", "");
-}
-if (!isAndroidRuntime) {
-  const pageSub = document.getElementById("page-sub");
-  if (pageSub) pageSub.textContent = "填公网 Relay 地址与访问 token，即可打开 dsh 界面。";
-  document.querySelector(".group-h")?.setAttribute("hidden", "");
+} else if (!isAndroidRuntime) {
+  // 桌面：相机扫码不可用（无相机插件），其余两种是纯 WebView 实现，保留。
+  scanPairBtn?.setAttribute("hidden", "");
+  const scanNote = document.querySelector(".scan-note");
+  if (scanNote) {
+    scanNote.textContent = "从相册选二维码截图，或粘贴二维码图片 / 配对码，两种方式都可以。";
+  }
 }
 
 // 提交入口统一挂在 form 上：按钮（type=submit）与软键盘回车键走同一条路径，
