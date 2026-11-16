@@ -32,12 +32,19 @@
         relayUrl: 'https://8.148.8.249:24000'
         accessTokenFile: /path/to/relay-access-token
         caFile: /path/to/dsh-relay-ca.crt   # IP 入口必填；域名入口留空
+        deviceId: ''                        # ⚠️ 多台配对设备时必填其中一台的 deviceId
         claimApprovals: true
         askTimeoutMs: 110000
         claimQuestions: true
         questionTimeoutMs: 110000
         notifyDone: true
+        pollWaitSeconds: 25
 ```
+
+> ⚠️ **多设备必须显式绑定**：`deviceId` 留空时只有「恰好 1 台配对设备」能自动绑定；
+> ≥2 台时 `resolveDevice()` 拒绝广播，卡片在 `POST /notify/push` 之前就被丢弃，
+> 表现为「手机有订阅、却一条通知都不来」。填 `pair/devices` 里的 deviceId，
+> 或撤销闲置设备让 roster 回到 1 台。改配置后需重启 dsh-web（不热加载）。
 
 relay 侧需 `phoneDevicesFile` + `notifyEnabled: true`（统一 forwarder 的
 server.json `relay` 段）。

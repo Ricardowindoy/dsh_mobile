@@ -13,6 +13,9 @@
         relayUrl: 'https://8.148.8.249:24000'
         accessTokenFile: /home/radxa/.config/dsh-forwarder/relay-access-token
         caFile: /home/radxa/project/dsh/dsh_mobile/.tls/dsh-relay-ca.crt
+        # 多设备时必须显式绑定一台：留空且配对设备 >1 时插件会拒绝广播，
+        # 所有卡片在 POST 之前被丢弃（见 v2 设计 / 审批推送排查记录）。
+        # 这里只放通用占位值；由部署环境在 profile 的 cordis.patch.yml 覆盖。
         deviceId: ''
         claimApprovals: true
         askTimeoutMs: 110000
