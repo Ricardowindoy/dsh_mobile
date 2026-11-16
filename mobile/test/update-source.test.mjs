@@ -4,7 +4,7 @@ import {
   normalizeVersion, compareVersions, isNewer, pickReleaseAssets,
   githubUpdateFromRelease, giteeUpdateFromRelease, parseChecksum,
   normalizeSource, UPDATE_SOURCES, DEFAULT_UPDATE_SOURCE,
-  pickLatestGiteeRelease,
+  pickLatestGiteeRelease, platformArchFromUA,
 } from '../src/update-source.js'
 
 test('normalizeVersion strips v prefix and suffixes', () => {
@@ -53,16 +53,75 @@ test('draft / prerelease → null', () => {
 })
 
 test('release without APK asset throws → caller falls back to relay', () => {
-  assert.throws(() => githubUpdateFromRelease(release('v0.2.0', [{ name: 'notes.txt', browser_download_url: 'u' }]), '0.1.19'), /no APK asset/)
+  assert.throws(() => githubUpdateFromRelease(release('v0.2.0', [{ name: 'notes.txt', browser_download_url: 'u' }]), '0.1.19'), /no android installer/)
 })
 
 test('pickReleaseAssets prefers exact arm64 asset, then arm64, then any apk', () => {
-  const { apk } = pickReleaseAssets({ assets: [
+  const { asset } = pickReleaseAssets({ assets: [
     { name: 'app-x86_64-release.apk' },
     { name: 'app-arm64-release.apk' },
     { name: 'other-arm64-debug.apk' },
   ] })
-  assert.equal(apk.name, 'app-arm64-release.apk')
+  assert.equal(asset.name, 'app-arm64-release.apk')
+})
+
+test('platformArchFromUA distinguishes desktop platforms from Android', () => {
+  assert.deepEqual(platformArchFromUA('Mozilla/5.0 (Linux; Android 16; V2408A Build/x) AppleWebKit/537.36'), { platform: 'android', arch: 'arm64' })
+  assert.deepEqual(platformArchFromUA('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/157.0.0.0 Safari/537.36'), { platform: 'windows', arch: 'amd64' })
+  assert.deepEqual(platformArchFromUA('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'), { platform: 'macos', arch: 'universal' })
+  assert.deepEqual(platformArchFromUA('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'), { platform: 'linux', arch: 'amd64' })
+  assert.deepEqual(platformArchFromUA('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'), { platform: 'ios', arch: 'arm64' })
+})
+
+test('pickReleaseAssets picks the Windows setup exe, never the tunnel binary or apk', () => {
+  const release = { assets: [
+    { name: 'app-arm64-release.apk' },
+    { name: 'app-arm64-release.apk.sha256' },
+    { name: 'dsh-tunnel-windows-amd64.exe' },
+    { name: 'dsh-mobile_1.0.22_x64-setup.exe' },
+    { name: 'dsh-mobile_1.0.22_x64-setup.exe.sha256' },
+  ] }
+  const { asset, sha } = pickReleaseAssets(release, { platform: 'windows', arch: 'amd64' })
+  assert.equal(asset.name, 'dsh-mobile_1.0.22_x64-setup.exe')
+  assert.equal(sha.name, 'dsh-mobile_1.0.22_x64-setup.exe.sha256')
+})
+
+test('pickReleaseAssets picks dmg / deb / ipa per platform', () => {
+  const release = { assets: [
+    { name: 'app-arm64-release.apk' },
+    { name: 'dsh-mobile_1.0.22_universal.dmg' },
+    { name: 'dsh-mobile_1.0.22_amd64.deb' },
+    { name: 'dsh-mobile_1.0.22_amd64.AppImage' },
+    { name: 'dsh-mobile-unsigned.ipa' },
+  ] }
+  assert.equal(pickReleaseAssets(release, { platform: 'macos', arch: 'universal' }).asset.name, 'dsh-mobile_1.0.22_universal.dmg')
+  assert.equal(pickReleaseAssets(release, { platform: 'linux', arch: 'amd64' }).asset.name, 'dsh-mobile_1.0.22_amd64.deb')
+  assert.equal(pickReleaseAssets(release, { platform: 'ios', arch: 'arm64' }).asset.name, 'dsh-mobile-unsigned.ipa')
+})
+
+test('pickReleaseAssets does not borrow another platform checksum', () => {
+  const release = { assets: [
+    { name: 'app-arm64-release.apk' },
+    { name: 'app-arm64-release.apk.sha256' },
+    { name: 'dsh-mobile_1.0.22_x64-setup.exe' },
+  ] }
+  const { asset, sha } = pickReleaseAssets(release, { platform: 'windows', arch: 'amd64' })
+  assert.equal(asset.name, 'dsh-mobile_1.0.22_x64-setup.exe')
+  assert.equal(sha, null)
+})
+
+test('githubUpdateFromRelease on Windows returns the exe and its own checksum', () => {
+  const r = release('v1.0.22', [
+    { name: 'app-arm64-release.apk', browser_download_url: 'https://x/app-arm64-release.apk', size: 7457203 },
+    { name: 'app-arm64-release.apk.sha256', browser_download_url: 'https://x/app-arm64-release.apk.sha256' },
+    { name: 'dsh-mobile_1.0.22_x64-setup.exe', browser_download_url: 'https://x/dsh-mobile_1.0.22_x64-setup.exe', size: 1710848 },
+    { name: 'dsh-mobile_1.0.22_x64-setup.exe.sha256', browser_download_url: 'https://x/dsh-mobile_1.0.22_x64-setup.exe.sha256' },
+  ])
+  const u = githubUpdateFromRelease(r, '1.0.13', { platform: 'windows', arch: 'amd64' })
+  assert.equal(u.url.endsWith('dsh-mobile_1.0.22_x64-setup.exe'), true)
+  assert.equal(u.filename, 'dsh-mobile_1.0.22_x64-setup.exe')
+  assert.equal(u.size, 1710848)
+  assert.equal(u.checksumUrl.endsWith('dsh-mobile_1.0.22_x64-setup.exe.sha256'), true)
 })
 
 test('parseChecksum extracts the first 64-hex digest', () => {
@@ -96,7 +155,7 @@ test('giteeUpdateFromRelease: same/older → null, no apk throws, prerelease →
   assert.equal(giteeUpdateFromRelease(mk('v1.0.12', { prerelease: true }), '1.0.11'), null)
   assert.throws(() => giteeUpdateFromRelease(
     { tag_name: 'v2.0.0', created_at: 'x', assets: [{ name: 'notes.txt', browser_download_url: 'u' }] }, '1.0.11'),
-    /no APK asset/)
+    /no android installer/)
 })
 
 test('normalizeSource keeps valid sources, falls back to default for junk', () => {
