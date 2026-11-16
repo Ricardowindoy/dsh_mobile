@@ -105,6 +105,7 @@ func (h *Handler) Check(w http.ResponseWriter, r *http.Request) {
 		"code":        200,
 		"version":     item.Version,
 		"url":         fmt.Sprintf("%s/__dsh_tunnel__/update/download?platform=%s&arch=%s", base, platform, arch),
+		"filename":    item.Filename,
 		"size":        item.Size,
 		"sha256":      item.SHA256,
 		"releaseNote": item.ReleaseNote,

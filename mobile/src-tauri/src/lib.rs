@@ -6,10 +6,11 @@
 // config dir from the Rust side — WebView localStorage alone is not
 // guaranteed to survive app restarts on Android.
 //
-// 应用内自动更新：download_update 把 APK 流式下载到应用缓存目录并校验
-// SHA-256；install_update 通过 JNI 构造 FileProvider content:// URI +
-// ACTION_VIEW 拉起系统安装器（Android WebView/opener 插件都无法直接装
-// 本地 APK，必须原生侧发 intent）。
+// 应用内自动更新：download_update 把平台对应的安装包流式下载到应用缓存目录
+// 并校验 SHA-256；Android 的 install_update 通过 JNI 构造 FileProvider
+// content:// URI + ACTION_VIEW 拉起系统安装器（Android WebView/opener 插件
+// 都无法直接装本地 APK，必须原生侧发 intent）；桌面平台直接打开下载好的
+// 安装包（Windows setup.exe / macOS dmg / Linux deb）。
 
 // loopback OAuth 回调功能：插件已保留但**暂不注册**。
 // 0.1.16/0.1.17 的 on_navigation 钩子在 Android 上导致主线程 ANR → 白屏，
@@ -182,17 +183,41 @@ struct DownloadProgress {
     total: Option<u64>,
 }
 
-/// 把 APK 流式下载到应用缓存目录 updates/update.apk，边下边算 SHA-256；
+/// 把远端/前端给的资产名收敛成一个安全的本地文件名：只取最后一段路径，
+/// 只留 ASCII 字母数字与 . - _，拒绝空名和隐藏文件。正常资产名原样通过；
+/// 异常输入回落 update.bin，绝不把 `../` 之类的路径带进缓存目录。
+fn safe_update_filename(raw: Option<&str>) -> String {
+    let name = raw
+        .unwrap_or("")
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or("");
+    let cleaned: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        .collect();
+    if cleaned.is_empty() || cleaned.starts_with('.') {
+        "update.bin".into()
+    } else {
+        cleaned
+    }
+}
+
+/// 把更新包流式下载到应用缓存目录 updates/<资产名>，边下边算 SHA-256；
 /// expected_sha256 非空时校验不匹配即报错并删除半成品。返回 {path,size}。
 /// on_progress：必填的 tauri::ipc::Channel（tauri 2.12.5 没给 Option<Channel>
 /// 的 CommandArg impl——Channel 只实现 Serialize），每个写入块都推
 /// {received,total}；首尾事件保证「开始」与「100%」总会出现，不依赖分块边界。
+///
+/// filename 必须是发布资产原名（如 dsh-mobile_1.0.22_x64-setup.exe）：
+/// 桌面端靠扩展名选择打开方式；旧版固定写 update.apk 会让 Windows 无法执行。
 #[tauri::command]
 async fn download_update(
     app: tauri::AppHandle,
     on_progress: tauri::ipc::Channel<DownloadProgress>,
     url: String,
     expected_sha256: Option<String>,
+    filename: Option<String>,
 ) -> Result<Value, String> {
     use sha2::Digest;
     use tokio::io::AsyncWriteExt;
@@ -227,8 +252,9 @@ async fn download_update(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("create update dir: {e}"))?;
-    let tmp_path = dir.join("update.apk.part");
-    let final_path = dir.join("update.apk");
+    let file_name = safe_update_filename(filename.as_deref());
+    let tmp_path = dir.join(format!("{file_name}.part"));
+    let final_path = dir.join(&file_name);
 
     let mut hasher = sha2::Sha256::new();
     let mut file = tokio::fs::File::create(&tmp_path)
@@ -263,6 +289,8 @@ async fn download_update(
             return Err("更新包完整性校验失败（SHA-256 不匹配），已放弃安装".into());
         }
     }
+    // Windows 的 rename 不覆盖已存在目标：先删掉上一版同名安装包。
+    let _ = tokio::fs::remove_file(&final_path).await;
     tokio::fs::rename(&tmp_path, &final_path)
         .await
         .map_err(|e| format!("finalize update file: {e}"))?;
@@ -715,9 +743,26 @@ fn read_clipboard() -> Result<String, String> {
     Err("read_clipboard 仅支持 Android".into())
 }
 
-/// 非 Android 平台的占位实现（桌面开发预览用不到）。
+/// 桌面平台：打开下载好的安装包（Windows 启动 setup.exe / macOS 挂载 dmg /
+/// Linux 交给系统默认程序）。只允许打开缓存目录 updates/ 内的文件，避免
+/// WebView 侧传入任意本地路径。Android 的 APK 安装走上面的 JNI 实现。
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
-fn install_update(_app: tauri::AppHandle, _path: String) -> Result<(), String> {
-    Err("install_update 仅支持 Android".into())
+fn install_update(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let updates_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("cache dir: {e}"))?
+        .join("updates");
+    let root = std::fs::canonicalize(&updates_dir)
+        .map_err(|e| format!("更新缓存目录不可用：{e}"))?;
+    let file = std::fs::canonicalize(&path)
+        .map_err(|e| format!("安装包不存在或不可访问：{e}"))?;
+    if !file.starts_with(&root) {
+        return Err("安装包不在更新缓存目录，拒绝打开".into());
+    }
+    // 用原始绝对路径打开：Windows 的 canonicalize 会加 \\?\ 前缀，
+    // ShellExecute 对扩展长度路径兼容性差。
+    tauri_plugin_opener::open_path(&path, None::<&str>)
+        .map_err(|e| format!("打开安装包失败：{e}"))
 }
