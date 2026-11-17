@@ -36,7 +36,7 @@ object CookieBridgeNative {
             }
             out
         } catch (t: Throwable) {
-            errorJson("listSites", t)
+            CookieBridge.errorJson("listSites", t)
         }
     }
 
@@ -63,29 +63,7 @@ object CookieBridgeNative {
             }
             out
         } catch (t: Throwable) {
-            errorJson("clearSite", t)
+            CookieBridge.errorJson("clearSite", t)
         }
-    }
-
-    /** 把 Throwable 变成 {"error":"类名: 消息 @ 首帧"}，便于前端与日志定位。 */
-    private fun errorJson(op: String, t: Throwable): String {
-        val where = t.stackTrace.firstOrNull()?.let { "${it.fileName}:${it.lineNumber}" } ?: "?"
-        val msg = "${t.javaClass.name}: ${t.message ?: "(no message)"} @ $where"
-        return "{\"error\":${quote("$op 失败 — $msg")}}"
-    }
-
-    private fun quote(s: String): String = buildString(s.length + 2) {
-        append('"')
-        for (c in s) {
-            when (c) {
-                '"' -> append("\\\"")
-                '\\' -> append("\\\\")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
-            }
-        }
-        append('"')
     }
 }

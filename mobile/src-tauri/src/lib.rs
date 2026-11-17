@@ -470,25 +470,39 @@ async fn desktop_clear_site_cookies(
         let cookies = window
             .cookies()
             .map_err(|e| format!("枚举 cookie 失败: {e}"))?;
-        let mut deleted = 0usize;
-        let mut failed = 0usize;
-        for c in &cookies {
-            let domain = c.domain().unwrap_or("");
-            // 精确匹配归一化域名：清 trae.net 不碰 my.trae.net 之外的子域策略
-            // —— cookie domain 写的是什么就比什么（wry 返回的就是 store 里的
-            // 原样 domain），不做后缀匹配，避免误删其它站点。
-            if cookie_site(domain) != target {
-                continue;
-            }
+        // 精确匹配归一化域名：清 trae.net 不碰 my.trae.net 之外的子域策略
+        // —— cookie domain 写的是什么就比什么（wry 返回的就是 store 里的
+        // 原样 domain），不做后缀匹配，避免误删其它站点。
+        let targets: Vec<_> = cookies
+            .iter()
+            .filter(|c| cookie_site(c.domain().unwrap_or("")) == target)
+            .cloned()
+            .collect();
+        let targeted = targets.len();
+        for c in &targets {
             // Tauri 的 WebviewWindow::delete_cookie 收的是**按值**的 Cookie
             // （wry 内部实现才是 &Cookie —— 照 wry 写会得到 E0308，CI 的
             // Windows/Linux/macOS/iOS 四个 job 会一起红）。
-            match window.delete_cookie(c.clone()) {
-                Ok(()) => deleted += 1,
-                Err(_) => failed += 1,
-            }
+            let _ = window.delete_cookie(c.clone());
         }
-        Ok(json!({ "deleted": deleted, "failed": failed }))
+        // 复核：删完再枚举一次，报「真正还剩几枚」而不是「我尝试了几次」。
+        // Android 侧 1.0.26 就是拿调用次数当成功次数，日志写「cleared=121」
+        // 而 cookie 一枚没少 —— 两个平台必须同一套诚实话术。
+        let after = window
+            .cookies()
+            .map_err(|e| format!("复核枚举失败: {e}"))?;
+        let remaining = after
+            .iter()
+            .filter(|c| cookie_site(c.domain().unwrap_or("")) == target)
+            .count();
+        let cleared = targeted.saturating_sub(remaining);
+        Ok(json!({
+            "attempts": targeted,
+            "targeted": targeted,
+            "cleared": cleared,
+            "deleted": cleared,
+            "remaining": remaining,
+        }))
     })
     .await
     .map_err(|e| format!("清理任务失败: {e}"))?

@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 按站点清理 App WebView 里的登录 cookie。
@@ -21,22 +22,20 @@ import android.webkit.ValueCallback
  *
  * ## 站点清单从哪来（不是拍脑袋）
  *
- * [LOGIN_HOSTS] 逐个取自 JetHub 插件里**真实会打开**的登录地址
- * （JetHub 的 lib 目录下各 JS 与 plugin-client/jet-hub.js 里带
- * login/auth/oauth/sso 的 URL）。
+ * [LOGIN_HOSTS] 逐个取自 JetHub 插件里**真实会打开**的登录地址。清单只用于
+ * 「探测」，不用于「展示」：只有真查到 cookie 的域才进列表 —— 列一个空站点
+ * 等于撒谎。
  *
- * ⚠️ 别在这段 KDoc 里写形如 lib/＊.js 的字面量：Kotlin 块注释**允许嵌套**，
- * 文本里出现斜杠加星号就会开一个永不闭合的嵌套注释，整个文件被吞掉，
- * 报错只有一句 `Unclosed comment`（1.0.24 首次 CI 就这样红的）。
- * 清单只用于「探测」，不用于「展示」：只有真查到 cookie 的域才进列表 ——
- * 列一个空站点等于撒谎。
+ * ## 删除为什么这么绕（两条真机教训，别简化）
  *
- * ## API 约束
- *
- * - [CookieManager.getCookie] 只能按 URL 查，不能枚举全 store → 必须靠清单探测。
- * - 回调与 setCookie 必须回主线程（WebView 硬约束），统一走 [runOnMain]。
- * - 删除靠「写一条 Max-Age=0 的同名 cookie 覆盖」：CookieManager 没有按域批量删
- *   的 API，removeAllCookies 是全清（不能用）。
+ * 1. `setCookie(url, value)` 是**异步**的，返回不代表写入生效。1.0.26 的日志里
+ *    「cleared=121」而重扫计数纹丝不动，就是拿调用次数当成功次数。必须用
+ *    带 callback 的重载等回调结束，再 `flush()`，**然后重新探测复核**。
+ * 2. cookie 的身份是 (name, domain, path, secure)。`getCookie` 只返回 name=value，
+ *    拿不到 domain/path/secure，所以只能把「host-only / 各级祖先 domain」×
+ *    「secure / 非 secure」都写过一遍，再复核到底删掉没有。
+ *    ⚠️ 另外别拼 `https://".$host"/` 这种带前导点的 URL —— 那是**非法主机名**，
+ *    getCookie/setCookie 都会静默失效（1.0.24 的变体写法就踩了这个）。
  */
 object CookieBridge {
 
@@ -76,91 +75,233 @@ object CookieBridge {
 
     /**
      * 列出 cookie store 里实际**有 cookie** 的外部登录站点。
-     * 回调在主线程，形如 [{site, cookieCount, names}]。
+     * 回调形如 [{site, cookieCount, names}]。
      */
     @JvmStatic
     fun sites(callback: ValueCallback<String>) {
         runOnMain {
-            val manager = CookieManager.getInstance()
-            val out = StringBuilder("[")
-            var first = true
-            for (host in LOGIN_HOSTS) {
-                val names = cookieNamesFor(manager, host)
-                if (names.isEmpty()) continue
-                if (!first) out.append(',')
-                first = false
-                out.append("{\"site\":\"").append(jsonEscape(host))
-                    .append("\",\"cookieCount\":").append(names.size)
-                    .append(",\"names\":[")
-                    .append(names.joinToString(",") { "\"" + jsonEscape(it) + "\"" })
-                    .append("]}")
+            try {
+                val manager = CookieManager.getInstance()
+                val out = StringBuilder("[")
+                var first = true
+                for (host in LOGIN_HOSTS) {
+                    val names = probeNames(manager, host)
+                    if (names.isEmpty()) continue
+                    if (!first) out.append(',')
+                    first = false
+                    out.append("{\"site\":\"").append(jsonEscape(host))
+                        .append("\",\"cookieCount\":").append(names.size)
+                        .append(",\"names\":[")
+                        .append(names.joinToString(",") { "\"" + jsonEscape(it) + "\"" })
+                        .append("]}")
+                }
+                out.append("]")
+                callback.onReceiveValue(out.toString())
+            } catch (t: Throwable) {
+                callback.onReceiveValue(errorJson("sites", t))
             }
-            out.append("]")
-            callback.onReceiveValue(out.toString())
         }
     }
 
     /**
-     * 清掉 [site]（及其 www / 前后点变体）的 cookie。
+     * 清掉 [site] 的 cookie，**并在写完之后重新探测复核**。
      *
-     * @param cookieNames 要清的具体 cookie 名；空 = 该域下全部。
-     * @param callback 回调 {"requested":n,"cleared":n}
+     * 回调：{"attempts":n,"targeted":n,"cleared":n,"remaining":n,"remainingNames":[...]}
+     * cleared/remaining 是复核结果，不是尝试次数 —— 前端据此如实展示。
+     *
+     * @param cookieNames 只清这些名字；空 = 该 host 上全部（受保护项除外）。
      */
     @JvmStatic
     fun clearSite(site: String, cookieNames: Array<String>, callback: ValueCallback<String>) {
         runOnMain {
-            val manager = CookieManager.getInstance()
-            var requested = 0
-            var cleared = 0
-            // 同一份 cookie 可能以 apex / 带点 / www 三种 domain 属性存在，
-            // 逐个写过期覆盖，才不会有漏网的。
-            val variants = linkedSetOf(site, ".$site", "www.$site", ".www.$site")
-            for (host in variants) {
-                val names = cookieNamesFor(manager, host)
-                for (n in names) {
-                    if (isProtected(n)) continue
-                    if (cookieNames.isNotEmpty() && !cookieNames.contains(n)) continue
-                    requested++
-                    if (expire(manager, host, n)) cleared++
+            try {
+                val manager = CookieManager.getInstance()
+                val hosts = probeHostsFor(site)
+                val before = hosts.flatMap { probeNames(manager, it) }.toSet()
+                // 只清调用方点名的那几枚；没点名就清该 host 全部。
+                val targets = if (cookieNames.isEmpty()) before
+                else before.filter { cookieNames.contains(it) }.toSet().ifEmpty { cookieNames.toSet() }
+                if (targets.isEmpty()) {
+                    callback.onReceiveValue(
+                        "{\"attempts\":0,\"targeted\":0,\"cleared\":0,\"remaining\":0,\"remainingNames\":[]}",
+                    )
+                    return@runOnMain
                 }
+
+                // 两阶段：先按最常见形态（host-only、非 secure、Path=/）写一遍，
+                // 复核若已清干净就收工；还有剩的才升级到「各级祖先 domain ×
+                // secure 与否」的全矩阵。一上来就打全矩阵，几百次写入会把等待
+                // 预算撑爆，而绝大多数 cookie 其实第一轮就没了。
+                var attempts = 0
+
+                fun submit(plans: List<Quad>, next: () -> Unit) {
+                    val pending = AtomicInteger(0)
+                    for (pl in plans) {
+                        val value = buildString {
+                            append(pl.name)
+                                .append("=; Path=/; Max-Age=0; ")
+                                .append("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                            if (pl.secure) append("; Secure")
+                            if (pl.domain != null) append("; Domain=").append(pl.domain)
+                        }
+                        attempts++
+                        pending.incrementAndGet()
+                        try {
+                            // 带 callback 的重载：写入是异步的，必须等回调 ——
+                            // 否则 flush() 可能落盘的是"还没改"的状态。
+                            manager.setCookie("https://${pl.host}/", value) {
+                                pending.decrementAndGet()
+                            }
+                        } catch (_: Throwable) {
+                            pending.decrementAndGet()
+                        }
+                    }
+                    awaitWritesThen(pending, next)
+                }
+
+                val primaryHost = hosts.first()
+                val phaseA = targets.map { Quad(primaryHost, it, null, false) }
+                submit(phaseA) {
+                    try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
+                    val remain1 = targets.intersect(hosts.flatMap { probeNames(manager, it) }.toSet())
+                    if (remain1.isEmpty()) {
+                        finish(manager, hosts, targets, attempts, callback)
+                        return@submit
+                    }
+                    val domains = domainCandidatesFor(site)
+                    val phaseB = ArrayList<Quad>()
+                    for (h in hosts) {
+                        for (n in remain1) {
+                            for (d in domains) {
+                                for (sec in SECURE_VARIANTS) phaseB.add(Quad(h, n, d, sec))
+                            }
+                        }
+                    }
+                    submit(phaseB) {
+                        try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
+                        finish(manager, hosts, targets, attempts, callback)
+                    }
+                }
+            } catch (t: Throwable) {
+                callback.onReceiveValue(errorJson("clearSite", t))
             }
-            // 不调 removeExpiredCookies()：它在 API 33 起废弃、在 android-36 的
-            // android.jar 里已经**不存在**（javap 实测只剩单数 removeExpiredCookie）。
-            // 这里也不需要它——过期 cookie 由 WebView 自动淘汰，flush() 负责落盘。
-            manager.flush()
-            callback.onReceiveValue("{\"requested\":$requested,\"cleared\":$cleared}")
         }
     }
 
+    /** 一次写入尝试：往 host 写一个 name 的过期 cookie，带 domain/secure 变体。 */
+    private class Quad(val host: String, val name: String, val domain: String?, val secure: Boolean)
+
+    /** 复核：重扫，算出真正消失的与仍然存在的，如实上报。 */
+    private fun finish(
+        manager: CookieManager,
+        hosts: List<String>,
+        targets: Set<String>,
+        attempts: Int,
+        callback: ValueCallback<String>,
+    ) {
+        try {
+            val after = hosts.flatMap { probeNames(manager, it) }.toSet()
+            val remaining = targets.intersect(after)
+            val cleared = targets.size - remaining.size
+            val names = remaining.joinToString(",") { "\"" + jsonEscape(it) + "\"" }
+            callback.onReceiveValue(
+                "{\"attempts\":$attempts,\"targeted\":${targets.size}," +
+                    "\"cleared\":$cleared,\"remaining\":${remaining.size}," +
+                    "\"remainingNames\":[$names]}",
+            )
+        } catch (t: Throwable) {
+            callback.onReceiveValue(errorJson("clearSite.verify", t))
+        }
+    }
+
+    /**
+     * 轮询等所有写回调结束（最多 2s），**不阻塞主线程** —— 用 Handler 排队。
+     * 在已经就是主线程的情况下 block 等回调会直接死锁。
+     */
+    private fun awaitWritesThen(pending: AtomicInteger, action: () -> Unit) {
+        val handler = Handler(Looper.getMainLooper())
+        var waited = 0
+        val tick = object : Runnable {
+            override fun run() {
+                if (pending.get() <= 0 || waited >= 2000) {
+                    action()
+                    return
+                }
+                waited += 20
+                handler.postDelayed(this, 20)
+            }
+        }
+        handler.postDelayed(tick, 20)
+    }
+
+    /** 探测用主机：站点本身 + 它的 apex（去 www.）—— 两处都可能有 cookie。 */
+    private fun probeHostsFor(site: String): List<String> {
+        val h = site.trim().removePrefix(".").lowercase()
+        if (h.isEmpty()) return emptyList()
+        val out = linkedSetOf(h)
+        if (h.startsWith("www.")) out.add(h.removePrefix("www.")) else out.add("www.$h")
+        return out.toList()
+    }
+
+    /**
+     * 可能的 domain 属性候选：host-only（null）+ 各级祖先域。
+     * cookie 存的是 Domain=.huaweicloud.com 时，只有用 Domain=huaweicloud.com
+     * 去写才能覆盖它；反过来用 Domain=子域 写不到父域上的那份。
+     */
+    private fun domainCandidatesFor(site: String): List<String?> {
+        val h = site.trim().removePrefix(".").lowercase()
+        val parts = h.split('.').filter { it.isNotEmpty() }
+        val out = ArrayList<String?>()
+        out.add(null) // host-only
+        // 从完整 host 一路收到剩两段（TLD+1），最多 3 个，避免写太多。
+        for (i in 0..minOf(parts.size - 2, 2)) {
+            val d = parts.subList(i, parts.size).joinToString(".")
+            if (d.isNotEmpty()) out.add(d)
+        }
+        return out
+    }
+
     /** 该 host 上现存（且非保护）的 cookie 名。 */
-    private fun cookieNamesFor(manager: CookieManager, host: String): List<String> {
+    private fun probeNames(manager: CookieManager, host: String): List<String> {
         val raw = try {
             manager.getCookie("https://$host/")
         } catch (_: Throwable) {
-            return emptyList()
+            null
         } ?: return emptyList()
         if (raw.isEmpty()) return emptyList()
         return raw.split(";").mapNotNull { part ->
             part.trim().substringBefore('=').takeIf { it.isNotEmpty() && !isProtected(it) }
-        }
-    }
-
-    /** 用 Max-Age=0 覆盖同名 cookie；成功返回 true。 */
-    private fun expire(manager: CookieManager, host: String, name: String): Boolean {
-        val domain = host.removePrefix(".")
-        val expired = "$name=; Domain=$domain; Path=/; Max-Age=0; " +
-            "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
-        return try {
-            manager.setCookie("https://$host/", expired)
-            true
-        } catch (_: Throwable) {
-            false
-        }
+        }.distinct()
     }
 
     private fun runOnMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block()
         else Handler(Looper.getMainLooper()).post(block)
+    }
+
+    /** secure 与非 secure 的同名 cookie 在 store 里是**两条**，都得覆盖。 */
+    private val SECURE_VARIANTS = booleanArrayOf(false, true)
+
+    /** 把 Throwable 变成 {"error":"..."}，任何异常都不许跨 JNI 抛。 */
+    internal fun errorJson(op: String, t: Throwable): String {
+        val where = t.stackTrace.firstOrNull()?.let { "${it.fileName}:${it.lineNumber}" } ?: "?"
+        val msg = "${t.javaClass.name}: ${t.message ?: "(no message)"} @ $where"
+        return "{\"error\":${quote("$op 失败 — $msg")}}"
+    }
+
+    internal fun quote(s: String): String = buildString(s.length + 2) {
+        append('"')
+        for (c in s) {
+            when (c) {
+                '"' -> append("\\\"")
+                '\\' -> append("\\\\")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+            }
+        }
+        append('"')
     }
 
     private fun jsonEscape(s: String): String = buildString(s.length) {

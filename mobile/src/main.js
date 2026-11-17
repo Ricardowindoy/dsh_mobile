@@ -1344,13 +1344,18 @@ async function clearOneSite(site, btn) {
     const res = android
       ? await invoke("android_clear_site_cookies", { site, cookieNames: row?.names || [] })
       : await invoke("desktop_clear_site_cookies", { site });
+    // ⚠️ Android 侧的 cleared 是**写完之后重新探测复核**得到的数字，不是
+    // setCookie 的调用次数。1.0.26 曾把调用次数当成功次数报「已清除 121 枚」，
+    // 而 cookies 纹丝不动 —— 报数必须来自复核，否则就是在骗用户。
     const cleared = Number(res?.cleared ?? res?.deleted ?? 0);
-    const failed = Number(res?.failed ?? 0);
-    log(`cookie clear ${site}: cleared=${cleared} failed=${failed}`);
-    if (cleared > 0) {
+    const remaining = Number(res?.remaining ?? res?.failed ?? 0);
+    log(`cookie clear ${site}: cleared=${cleared} remaining=${remaining} attempts=${res?.attempts ?? "-"}`);
+    if (remaining === 0 && cleared > 0) {
       setStatusText(cookieClearStatus, `${site} 已清除 ${cleared} 枚 cookie`, "ok");
-    } else if (failed > 0) {
-      setStatusText(cookieClearStatus, `${site} 清除失败（${failed} 枚）`, "bad");
+    } else if (remaining > 0 && cleared > 0) {
+      setStatusText(cookieClearStatus, `${site} 清掉 ${cleared} 枚，仍有 ${remaining} 枚未清除`, "bad");
+    } else if (remaining > 0) {
+      setStatusText(cookieClearStatus, `${site} 没清掉（仍有 ${remaining} 枚）—— 该站 cookie 可能是 HttpOnly 或受限路径`, "bad");
     } else {
       // 如实说"没清到任何东西"，不兜底成成功。
       setStatusText(cookieClearStatus, `${site} 没有可清的 cookie`, undefined);

@@ -266,6 +266,49 @@ test('D8 每个被 JNI 按名字查找的类都要有 R8 keep 规则', () => {
   }
 })
 
+test('D9 上报的「已清除」必须来自复核，不能是尝试次数', () => {
+  // 1.0.26 的病根：日志写 "cleared=121 failed=0"，而重扫计数一枚没少 ——
+  // 把 setCookie 的调用次数当成了清除成功数。两个平台都必须删完再探测一遍。
+  //
+  // ⚠️ 判据按**函数体**取，不能按「文件里某处之后出现某词」——helper 通常定义在
+  //    后面，那种写法永远命中（第一版就是这么假绿的）。
+  const kt = stripKotlinComments(
+    readFileSync(join(MOBILE, KT_DIR, 'CookieBridge.kt'), 'utf8'),
+  ).code
+  const bodyOf = (src, from, to) => {
+    const i = src.indexOf(from)
+    assert.ok(i >= 0, `找不到 ${from}`)
+    if (!to) return src.slice(i)
+    const j = src.indexOf(to, i + from.length)
+    // 锚点找不到必须报错，不能默默切到文件末尾 —— 那会把别的函数也算进来，
+    // 让判据变成假绿（这条自己就踩过一次：锚点还留着旧函数名）。
+    assert.ok(j > i, `找不到结束锚点 ${to}`)
+    return src.slice(i, j)
+  }
+  const clearSite = bodyOf(kt, 'fun clearSite(', 'private fun finish(')
+  assert.ok(/flush\(\)/.test(clearSite), 'clearSite 没有 flush()')
+  assert.ok(/awaitWritesThen\(/.test(clearSite), 'clearSite 没等写入回调结束')
+  assert.ok(/finish\(/.test(clearSite), 'clearSite 删完没有走复核（finish）')
+  // 只允许两个「直接上报」的出口：无目标可清的早退、以及 catch 里的 errorJson。
+  // 任何把 attempts 之类数字直接当结果报出去的写法都会让这个数量超标。
+  const directReports = (clearSite.match(/callback\.onReceiveValue\(/g) || []).length
+  assert.ok(directReports <= 2,
+    `clearSite 里有 ${directReports} 处直接上报（应 ≤2：空目标 + 异常）；清除结果必须来自 finish 的复核`)
+
+  const verify = bodyOf(kt, 'private fun finish(', 'private fun awaitWritesThen')
+  assert.ok(/probeNames\(/.test(verify), '复核函数没有重新探测 —— 报的数字仍不是复核结果')
+  // Kotlin 里这段 JSON 是转义字符串（\"remaining\"），所以按裸词判。
+  assert.ok(verify.includes('remaining'), '复核结果缺少 remaining 字段')
+
+  // 桌面端：删除前后各枚举一次，并给出 remaining。
+  const rs = read('src-tauri/src/lib.rs')
+  const desk = bodyOf(rs, 'async fn desktop_clear_site_cookies', '// --- Android：按站点清登录 cookie')
+  const delIdx = desk.indexOf('delete_cookie')
+  assert.ok(delIdx > 0, '桌面端没有 delete_cookie')
+  assert.ok(/\.cookies\(\)/.test(desk.slice(delIdx)), '桌面端删完没有重新枚举复核')
+  assert.ok(/"remaining"/.test(desk), '桌面端结果里没有 remaining')
+})
+
 test('D2 Rust 注册了四条 cookie 命令', () => {
   const rs = read('src-tauri/src/lib.rs')
   for (const cmd of ['android_cookie_sites', 'android_clear_site_cookies',
