@@ -47,3 +47,9 @@
 # nativeAnswer]，而同 APK 内被 keep 的 InstallBridge 方法齐全，故必须显式保活。
 -keep class com.namelessric.dsh_mobile.NotifyBridge { *; }
 -keep class com.namelessric.dsh_mobile.NotifyBridge$AnswerReceiver { *; }
+# 下面是 1.0.25 的真机事故（NoSuchMethodError: no static method listSites）：
+# release 是 isMinifyEnabled=true，R8 会把「只被 native 调用」的静态方法当成无用
+# 代码删掉/改名 —— Java 侧没有任何引用，R8 无从知道 Rust 在 JNI 里按名字找它。
+# 类里所有成员都要保：错误信息只显示类还在、方法没了，最难查。
+-keep class com.namelessric.dsh_mobile.CookieBridge { *; }
+-keep class com.namelessric.dsh_mobile.CookieBridgeNative { *; }

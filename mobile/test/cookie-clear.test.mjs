@@ -248,6 +248,24 @@ test('D7 类引用走 init 缓存，不用 loadClass 传 JNI 斜杠名', () => {
     '没有在 nativeInitBridge 里 find_class 缓存（find_class 才吃斜杠名）')
 })
 
+test('D8 每个被 JNI 按名字查找的类都要有 R8 keep 规则', () => {
+  // 1.0.25 真机事故：release 是 isMinifyEnabled=true，R8 把「只被 native 调用」
+  // 的静态方法当无用代码删了 —— Java 侧没人引用它，R8 不可能知道 Rust 在 JNI 里
+  // 按名字找。真机只报一句 NoSuchMethodError: no static method ...，排查代价极高。
+  // 这条闸门把「Rust 用 find_class 找的类」与「proguard keep 列表」对齐。
+  const rs = read('src-tauri/src/lib.rs')
+  const called = new Set(
+    [...rs.matchAll(/find_class\(\s*"com\/namelessric\/dsh_mobile\/([A-Za-z0-9_$]+)"/g)].map((m) => m[1]),
+  )
+  assert.ok(called.size > 0, '一个 find_class 都没找到？判据本身失效了')
+  const pg = read('src-tauri/gen/android/app/proguard-rules.pro')
+  for (const cls of called) {
+    const fq = `com.namelessric.dsh_mobile.${cls}`
+    const kept = new RegExp(`^-keep\\s+class\\s+${fq.replace(/\./g, '\\.')}\\s*\\{\\s*\\*;\\s*\\}`, 'm').test(pg)
+    assert.ok(kept, `Rust 用 find_class 找 ${fq}，但 proguard-rules.pro 没有 -keep class ${fq} { *; }（R8 会删掉它的方法）`)
+  }
+})
+
 test('D2 Rust 注册了四条 cookie 命令', () => {
   const rs = read('src-tauri/src/lib.rs')
   for (const cmd of ['android_cookie_sites', 'android_clear_site_cookies',
