@@ -124,7 +124,9 @@ object CookieBridge {
                     if (expire(manager, host, n)) cleared++
                 }
             }
-            try { manager.removeExpiredCookies() } catch (_: Throwable) { /* 老版本可省 */ }
+            // 不调 removeExpiredCookies()：它在 API 33 起废弃、在 android-36 的
+            // android.jar 里已经**不存在**（javap 实测只剩单数 removeExpiredCookie）。
+            // 这里也不需要它——过期 cookie 由 WebView 自动淘汰，flush() 负责落盘。
             manager.flush()
             callback.onReceiveValue("{\"requested\":$requested,\"cleared\":$cleared}")
         }

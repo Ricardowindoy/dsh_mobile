@@ -14,6 +14,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isProtectedCookieName, normalizeCookieSites, PROTECTED_COOKIE_PREFIXES } from '../src/cookie-sites.js'
@@ -199,6 +200,28 @@ test('D4 用到的 Android 平台符号必须 import（漏了本地看不见、C
       const qualified = code.includes(fq)
       assert.ok(imported || qualified, `${f} 用了 ${sym} 却没 import ${fq}`)
     }
+  }
+})
+
+test('D5 调用的 CookieManager 方法必须在目标 SDK 里真实存在', () => {
+  // 1.0.24 第二次 CI 红在这里：调了 removeExpiredCookies()，而它在 API 33 起
+  // 废弃、android-36 的 android.jar 里已经删了（只剩单数 removeExpiredCookie）。
+  // 「方法存在」这种事实不能靠记忆，要拿 android.jar 去问 javap。
+  const JAR = process.env.ANDROID_JAR || '/home/radxa/Android/Sdk/platforms/android-36/android.jar'
+  const JAVAP = process.env.JAVAP || '/opt/jdk17/bin/javap'
+  if (!existsSync(JAR) || !existsSync(JAVAP)) {
+    // 缺依赖 → SKIP（不是 PASS）：不能让「没查」伪装成「查过且没问题」。
+    console.log('  SKIP: 缺 android.jar 或 javap，无法校验 API 存在性')
+    return
+  }
+  const jarMethods = execFileSync(JAVAP, ['-classpath', JAR, 'android.webkit.CookieManager'], { encoding: 'utf8' })
+  const available = new Set([...jarMethods.matchAll(/\b([a-zA-Z_]\w*)\(/g)].map((m) => m[1]))
+
+  const src = stripKotlinComments(readFileSync(join(MOBILE, KT_DIR, 'CookieBridge.kt'), 'utf8')).code
+  const used = [...src.matchAll(/manager\.([a-zA-Z_]\w*)\s*\(/g)].map((m) => m[1])
+  assert.ok(used.length > 0, '一个 CookieManager 方法都没找到？判据本身失效了')
+  for (const m of new Set(used)) {
+    assert.ok(available.has(m), `CookieManager.${m}() 在 android-36 里不存在（javap 查无此法）`)
   }
 })
 
