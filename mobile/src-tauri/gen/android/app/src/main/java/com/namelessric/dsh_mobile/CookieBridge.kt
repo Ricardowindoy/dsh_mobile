@@ -22,7 +22,12 @@ import android.webkit.ValueCallback
  * ## 站点清单从哪来（不是拍脑袋）
  *
  * [LOGIN_HOSTS] 逐个取自 JetHub 插件里**真实会打开**的登录地址
- * （`lib/*.js` 与 `plugin-client/jet-hub.js` 里带 login/auth/oauth/sso 的 URL）。
+ * （JetHub 的 lib 目录下各 JS 与 plugin-client/jet-hub.js 里带
+ * login/auth/oauth/sso 的 URL）。
+ *
+ * ⚠️ 别在这段 KDoc 里写形如 lib/＊.js 的字面量：Kotlin 块注释**允许嵌套**，
+ * 文本里出现斜杠加星号就会开一个永不闭合的嵌套注释，整个文件被吞掉，
+ * 报错只有一句 `Unclosed comment`（1.0.24 首次 CI 就这样红的）。
  * 清单只用于「探测」，不用于「展示」：只有真查到 cookie 的域才进列表 ——
  * 列一个空站点等于撒谎。
  *

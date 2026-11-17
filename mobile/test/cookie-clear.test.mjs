@@ -144,6 +144,64 @@ test('D1 Kotlin 桥存在，带保护清单与真实探测', () => {
   assert.ok(!/removeAllCookies/.test(codeOnly), '代码里出现了全清调用（会清掉 dsh 登录态）')
 })
 
+// 下面两条是「CI 才会红」的错误类型：本地没有 Android 编译链，Kotlin 的
+// import 漏写、注释不闭合在本地看不见，只有 GitHub 的 Android job 才会炸，
+// 一轮 20 分钟。所以在本地用静态检查把它们提前钉住。
+
+const KT_DIR = 'src-tauri/gen/android/app/src/main/java/com/namelessric/dsh_mobile'
+
+/** 剥掉 Kotlin 的注释（块注释**可嵌套**，必须按深度走，不能只找星号斜杠）。 */
+function stripKotlinComments(src) {
+  let out = ''
+  let depth = 0
+  let i = 0
+  while (i < src.length) {
+    if (src.startsWith('/*', i)) { depth++; i += 2; continue }
+    if (depth > 0 && src.startsWith('*/', i)) { depth--; i += 2; continue }
+    if (depth === 0 && src.startsWith('//', i)) {
+      while (i < src.length && src[i] !== '\n') i++
+      continue
+    }
+    if (depth === 0) out += src[i]
+    i++
+  }
+  return { code: out, depth }
+}
+
+test('D3 Kotlin 文件块注释必须闭合（注释可嵌套，漏一个整文件失效）', () => {
+  const { readdirSync } = { readdirSync: null }
+  const files = ['CookieBridge.kt', 'CookieBridgeNative.kt']
+  for (const f of files) {
+    const src = readFileSync(join(MOBILE, KT_DIR, f), 'utf8')
+    const { depth } = stripKotlinComments(src)
+    assert.equal(depth, 0,
+      `${f} 的块注释没闭合（Kotlin 注释允许嵌套，KDoc 里出现斜杠加星号就会开一个永不闭合的嵌套注释）`)
+  }
+})
+
+test('D4 用到的 Android 平台符号必须 import（漏了本地看不见、CI 才红）', () => {
+  // 只覆盖本项目实际用到的平台符号，避免猜出一堆误报。
+  const PKG = {
+    ValueCallback: 'android.webkit.ValueCallback',
+    CookieManager: 'android.webkit.CookieManager',
+    WebView: 'android.webkit.WebView',
+    Handler: 'android.os.Handler',
+    Looper: 'android.os.Looper',
+    Activity: 'android.app.Activity',
+  }
+  for (const f of ['CookieBridge.kt', 'CookieBridgeNative.kt']) {
+    const raw = readFileSync(join(MOBILE, KT_DIR, f), 'utf8')
+    const { code } = stripKotlinComments(raw)
+    for (const [sym, fq] of Object.entries(PKG)) {
+      const used = new RegExp(`\\b${sym}\\b`).test(code)
+      if (!used) continue
+      const imported = new RegExp(`^\\s*import\\s+${fq.replace(/\./g, '\\.')}\\s*$`, 'm').test(code)
+      const qualified = code.includes(fq)
+      assert.ok(imported || qualified, `${f} 用了 ${sym} 却没 import ${fq}`)
+    }
+  }
+})
+
 test('D2 Rust 注册了四条 cookie 命令', () => {
   const rs = read('src-tauri/src/lib.rs')
   for (const cmd of ['android_cookie_sites', 'android_clear_site_cookies',

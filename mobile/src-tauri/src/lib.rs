@@ -480,7 +480,10 @@ async fn desktop_clear_site_cookies(
             if cookie_site(domain) != target {
                 continue;
             }
-            match window.delete_cookie(c) {
+            // Tauri 的 WebviewWindow::delete_cookie 收的是**按值**的 Cookie
+            // （wry 内部实现才是 &Cookie —— 照 wry 写会得到 E0308，CI 的
+            // Windows/Linux/macOS/iOS 四个 job 会一起红）。
+            match window.delete_cookie(c.clone()) {
                 Ok(()) => deleted += 1,
                 Err(_) => failed += 1,
             }
