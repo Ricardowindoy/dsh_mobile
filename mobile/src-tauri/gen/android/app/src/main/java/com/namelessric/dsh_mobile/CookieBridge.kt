@@ -165,7 +165,10 @@ object CookieBridge {
                     try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
                     val remain1 = targets.intersect(hosts.flatMap { probeNames(manager, it) }.toSet())
                     if (remain1.isEmpty()) {
-                        finish(manager, hosts, targets, attempts, callback)
+                        // ⚠️ 先别急着报成功：站点页面若还开着，它的 JS 可能在我们
+                        // 写完的几毫秒内又把 cookie 写回来（qoder.cn 就是这么卡住 1 枚的，
+                        // 9 次写入全"成功"但复核永远还在）。隔一会儿再查一次再说。
+                        lateCheck(manager, hosts, targets, attempts, { plans, next -> submit(plans, next) }, callback)
                         return@submit
                     }
                     val domains = domainCandidatesFor(site)
@@ -179,7 +182,7 @@ object CookieBridge {
                     }
                     submit(phaseB) {
                         try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
-                        finish(manager, hosts, targets, attempts, callback)
+                        lateCheck(manager, hosts, targets, attempts, { plans, next -> submit(plans, next) }, callback)
                     }
                 }
             } catch (t: Throwable) {
@@ -191,6 +194,52 @@ object CookieBridge {
     /** 一次写入尝试：往 host 写一个 name 的过期 cookie，带 domain/secure 变体。 */
     private class Quad(val host: String, val name: String, val domain: String?, val secure: Boolean)
 
+    /**
+     * 延迟复查：等 [LATE_RECHECK_MS] 再看一眼。
+     *
+     * 为什么要等：站点页面若还在 WebView 里跑着，它的 JS（心跳/定时刷新）可能在
+     * 我们写完的瞬间把 cookie 又写回去 —— 现象就是"每次写入都成功、复核却永远
+     * 还剩同一枚"。隔一会儿再查能区分「没清掉」与「被页面写回来了」；如果确认
+     * 还在，再补一轮写入（这一次带上全部 domain 变体）。
+     */
+    private fun lateCheck(
+        manager: CookieManager,
+        hosts: List<String>,
+        targets: Set<String>,
+        attempts: Int,
+        submit: (List<Quad>, () -> Unit) -> Unit,
+        callback: ValueCallback<String>,
+    ) {
+        val handler = Handler(Looper.getMainLooper())
+        handler.postDelayed({
+            try {
+                val late = targets.intersect(hosts.flatMap { probeNames(manager, it) }.toSet())
+                if (late.isEmpty()) {
+                    finish(manager, hosts, targets, attempts, callback, rewrote = false)
+                    return@postDelayed
+                }
+                // 还在：补一轮（可能是被页面写回的，也可能第一次没匹配上）。
+                val domains = domainCandidatesFor(hosts.first())
+                val retry = ArrayList<Quad>()
+                for (h in hosts) {
+                    for (n in late) {
+                        for (d in domains) {
+                            for (sec in SECURE_VARIANTS) retry.add(Quad(h, n, d, sec))
+                        }
+                    }
+                }
+                submit(retry) {
+                    try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
+                    handler.postDelayed({
+                        finish(manager, hosts, targets, attempts, callback, rewrote = true)
+                    }, SETTLE_MS)
+                }
+            } catch (t: Throwable) {
+                callback.onReceiveValue(errorJson("clearSite.lateCheck", t))
+            }
+        }, LATE_RECHECK_MS)
+    }
+
     /** 复核：重扫，算出真正消失的与仍然存在的，如实上报。 */
     private fun finish(
         manager: CookieManager,
@@ -198,6 +247,7 @@ object CookieBridge {
         targets: Set<String>,
         attempts: Int,
         callback: ValueCallback<String>,
+        rewrote: Boolean = false,
     ) {
         try {
             val after = hosts.flatMap { probeNames(manager, it) }.toSet()
@@ -207,7 +257,7 @@ object CookieBridge {
             callback.onReceiveValue(
                 "{\"attempts\":$attempts,\"targeted\":${targets.size}," +
                     "\"cleared\":$cleared,\"remaining\":${remaining.size}," +
-                    "\"remainingNames\":[$names]}",
+                    "\"remainingNames\":[$names],\"rewrote\":$rewrote}",
             )
         } catch (t: Throwable) {
             callback.onReceiveValue(errorJson("clearSite.verify", t))
@@ -256,7 +306,11 @@ object CookieBridge {
         // 从完整 host 一路收到剩两段（TLD+1），最多 3 个，避免写太多。
         for (i in 0..minOf(parts.size - 2, 2)) {
             val d = parts.subList(i, parts.size).joinToString(".")
-            if (d.isNotEmpty()) out.add(d)
+            if (d.isEmpty()) continue
+            out.add(d)
+            // 再补一条带前导点的形式。Chrome 会把它归一化成不带点，但历史上
+            // 有些实现按字面比较，多写一条成本几乎为零。
+            out.add(".$d")
         }
         return out
     }
@@ -281,6 +335,12 @@ object CookieBridge {
 
     /** secure 与非 secure 的同名 cookie 在 store 里是**两条**，都得覆盖。 */
     private val SECURE_VARIANTS = booleanArrayOf(false, true)
+
+    /** 写完后隔多久复查（够慢的 JS 定时器暴露，又不至于让用户干等）。 */
+    private const val LATE_RECHECK_MS = 900L
+
+    /** 第二轮写完后再等一下，给 store 落盘与页面回写留出窗口。 */
+    private const val SETTLE_MS = 300L
 
     /** 把 Throwable 变成 {"error":"..."}，任何异常都不许跨 JNI 抛。 */
     internal fun errorJson(op: String, t: Throwable): String {

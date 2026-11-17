@@ -1349,13 +1349,22 @@ async function clearOneSite(site, btn) {
     // 而 cookies 纹丝不动 —— 报数必须来自复核，否则就是在骗用户。
     const cleared = Number(res?.cleared ?? res?.deleted ?? 0);
     const remaining = Number(res?.remaining ?? res?.failed ?? 0);
-    log(`cookie clear ${site}: cleared=${cleared} remaining=${remaining} attempts=${res?.attempts ?? "-"}`);
+    const leftNames = Array.isArray(res?.remainingNames) ? res.remainingNames : [];
+    // 剩余 cookie 的**名字**一定要进日志：不写出来，线上就只能看到"还剩 1 枚"，
+    // 无从判断是哪个（qoder.cn 卡住那次就是这样，白等了一轮）。
+    log(`cookie clear ${site}: cleared=${cleared} remaining=${remaining} attempts=${res?.attempts ?? "-"}` +
+      (leftNames.length ? ` left=[${leftNames.join(",")}] rewrote=${res?.rewrote ?? false}` : ""));
     if (remaining === 0 && cleared > 0) {
       setStatusText(cookieClearStatus, `${site} 已清除 ${cleared} 枚 cookie`, "ok");
     } else if (remaining > 0 && cleared > 0) {
-      setStatusText(cookieClearStatus, `${site} 清掉 ${cleared} 枚，仍有 ${remaining} 枚未清除`, "bad");
+      setStatusText(cookieClearStatus, `${site} 清掉 ${cleared} 枚，仍有 ${remaining} 枚（${leftNames.join("、")}）`, "bad");
     } else if (remaining > 0) {
-      setStatusText(cookieClearStatus, `${site} 没清掉（仍有 ${remaining} 枚）—— 该站 cookie 可能是 HttpOnly 或受限路径`, "bad");
+      // rewrote=true 说明"写完复查时又冒出来了"，最可能是该站点页面还开着、
+      // 它的 JS 把 cookie 写回去了 —— 这条线索必须给用户，否则他会反复点。
+      const why = res?.rewrote
+        ? "该站点页面可能还开着并重新写回了 cookie，先离开该站点再清一次"
+        : "该 cookie 可能来自受限路径或分区存储";
+      setStatusText(cookieClearStatus, `${site} 没清掉（${leftNames.join("、") || `${remaining} 枚`}）—— ${why}`, "bad");
     } else {
       // 如实说"没清到任何东西"，不兜底成成功。
       setStatusText(cookieClearStatus, `${site} 没有可清的 cookie`, undefined);

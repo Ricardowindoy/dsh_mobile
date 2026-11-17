@@ -118,6 +118,7 @@ test('C2 清理前有确认、清理后有如实结果反馈', () => {
   assert.ok(/window\.confirm\(/.test(js), '清理前必须确认（会丢登录态）')
   // 「没清到任何东西」不许兜底成成功文案
   assert.ok(/没有可清的 cookie/.test(js), '清到 0 枚时必须如实说，不能报成功')
+  assert.ok(/left=\[/.test(js), '剩余 cookie 的名字没有进日志（线上无法定位是哪一枚）')
 })
 
 test('C3 归一化只在纯模块里做，main.js 不再自写保护清单', () => {
@@ -285,20 +286,32 @@ test('D9 上报的「已清除」必须来自复核，不能是尝试次数', ()
     assert.ok(j > i, `找不到结束锚点 ${to}`)
     return src.slice(i, j)
   }
-  const clearSite = bodyOf(kt, 'fun clearSite(', 'private fun finish(')
+  const clearSite = bodyOf(kt, 'fun clearSite(', 'private fun lateCheck(')
   assert.ok(/flush\(\)/.test(clearSite), 'clearSite 没有 flush()')
   assert.ok(/awaitWritesThen\(/.test(clearSite), 'clearSite 没等写入回调结束')
-  assert.ok(/finish\(/.test(clearSite), 'clearSite 删完没有走复核（finish）')
+  assert.ok(/lateCheck\(/.test(clearSite), 'clearSite 删完没有走复查（lateCheck）')
   // 只允许两个「直接上报」的出口：无目标可清的早退、以及 catch 里的 errorJson。
   // 任何把 attempts 之类数字直接当结果报出去的写法都会让这个数量超标。
   const directReports = (clearSite.match(/callback\.onReceiveValue\(/g) || []).length
   assert.ok(directReports <= 2,
     `clearSite 里有 ${directReports} 处直接上报（应 ≤2：空目标 + 异常）；清除结果必须来自 finish 的复核`)
 
+  const late = bodyOf(kt, 'private fun lateCheck(', 'private fun finish(')
+  assert.ok(/postDelayed/.test(late), '没有延迟复查：站点页面还在时会把 cookie 写回去，写完立刻复查等于没查')
+  assert.ok(/probeNames\(/.test(late), '延迟复查没有重新探测')
+  assert.ok(/finish\(/.test(late), '复查结束没有走复核上报（finish）')
+  // 延迟必须够长：0/太小 的延迟等于"写完立刻复查"，站点页面的 JS 只要晚几毫秒
+  // 写回就会被判成"没清掉"。这里钉住数量级（≥500ms）。
+  const delay = kt.match(/LATE_RECHECK_MS\s*=\s*(\d+)L/)?.[1]
+  assert.ok(delay !== undefined, '没有 LATE_RECHECK_MS 常量')
+  assert.ok(Number(delay) >= 500, `LATE_RECHECK_MS=${delay}ms 太短，等于写完立刻复查`)
+
   const verify = bodyOf(kt, 'private fun finish(', 'private fun awaitWritesThen')
   assert.ok(/probeNames\(/.test(verify), '复核函数没有重新探测 —— 报的数字仍不是复核结果')
   // Kotlin 里这段 JSON 是转义字符串（\"remaining\"），所以按裸词判。
   assert.ok(verify.includes('remaining'), '复核结果缺少 remaining 字段')
+  assert.ok(verify.includes('remainingNames'), '复核结果没带 remainingNames —— 线上只能看到「还剩 1 枚」，不知道是哪个')
+  assert.ok(verify.includes('rewrote'), '复核结果没带 rewrote 标记，前端无法区分「没清掉」与「被页面写回」')
 
   // 桌面端：删除前后各枚举一次，并给出 remaining。
   const rs = read('src-tauri/src/lib.rs')

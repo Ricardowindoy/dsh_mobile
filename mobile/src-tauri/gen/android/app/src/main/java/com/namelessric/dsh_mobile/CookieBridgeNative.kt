@@ -31,8 +31,8 @@ object CookieBridgeNative {
                 out = v ?: "[]"
                 latch.countDown()
             })
-            if (!latch.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                return "{\"error\":\"扫描超时（主线程 5s 未回调）\"}"
+            if (!latch.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                return "{\"error\":\"扫描超时（主线程 15s 未回调）\"}"
             }
             out
         } catch (t: Throwable) {
@@ -58,8 +58,8 @@ object CookieBridgeNative {
                 out = v ?: "{}"
                 latch.countDown()
             })
-            if (!latch.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
-                return "{\"error\":\"清除超时（主线程 5s 未回调）\"}"
+            if (!latch.await(15, java.util.concurrent.TimeUnit.SECONDS)) {
+                return "{\"error\":\"清除超时（主线程 15s 未回调）\"}"
             }
             out
         } catch (t: Throwable) {
