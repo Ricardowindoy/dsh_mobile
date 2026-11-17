@@ -16,6 +16,7 @@
 set -uo pipefail
 
 APK="${1:-}"
+EXPECT_VERSION="${2:-}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 LIB="$ROOT/mobile/src-tauri/src/lib.rs"
 
@@ -48,6 +49,21 @@ for m in $METHODS; do
   else echo "  ❌ 方法 $m 不在 dex 里（R8 删了？真机会 NoSuchMethodError）"; fail=1; fi
 done
 
-[ $fail -ne 0 ] && { echo "❌ APK 缺少 JNI 入口符号 —— 检查 proguard-rules.pro 的 -keep"; exit 1; }
+# 可选第二参数：期望的 versionName。防的是「验的是新包、发的是旧包」这类乌龙。
+if [ -n "$EXPECT_VERSION" ]; then
+  AAPT2="${AAPT2:-$(ls -d /home/radxa/Android/Sdk/build-tools/*/aapt2 2>/dev/null | head -1)}"
+  if [ -x "$AAPT2" ]; then
+    actual=$("$AAPT2" dump badging "$APK" 2>/dev/null | sed -nE "s/.*versionName='([^']+)'.*/\1/p" | head -1)
+    if [ "$actual" != "$EXPECT_VERSION" ]; then
+      echo "  ❌ APK versionName=$actual，期望 $EXPECT_VERSION（发的不是这个版本？）"; fail=1
+    else
+      echo "  ✅ versionName=$actual"
+    fi
+  else
+    echo "  SKIP: 没有 aapt2，跳过版本号核对（不算通过）"
+  fi
+fi
+
+[ $fail -ne 0 ] && { echo "❌ APK 校验未通过"; exit 1; }
 echo "✅ APK 里的 JNI 入口符号齐全"
 exit 0
