@@ -225,6 +225,29 @@ test('D5 调用的 CookieManager 方法必须在目标 SDK 里真实存在', () 
   }
 })
 
+test('D6 Kotlin 入口不把异常抛过 JNI，且失败要能自解释', () => {
+  // 1.0.24 真机：CookieBridgeNative 抛了异常，Rust 只收到一句
+  // "Java exception was raised during method invocation" —— jni crate 不带
+  // Java 侧的类名/消息，现场完全没法定位。所以入口必须自己兜住 Throwable，
+  // 把 {"error": ...} 当正常返回值送回 Rust。
+  const src = stripKotlinComments(readFileSync(join(MOBILE, KT_DIR, 'CookieBridgeNative.kt'), 'utf8')).code
+  assert.ok(/catch\s*\(\s*t:\s*Throwable\s*\)/.test(src), '没有 catch(Throwable)，异常会抛过 JNI')
+  assert.ok(/"\\"error\\""/.test(src) || /errorJson/.test(src), '失败时没有回 {"error":...}')
+  // 超时不能返回空结果冒充「没有 cookie」
+  assert.ok(/扫描超时|timeout/i.test(src), '超时没有单独报错（会被当成没有登录站点）')
+})
+
+test('D7 类引用走 init 缓存，不用 loadClass 传 JNI 斜杠名', () => {
+  // ClassLoader.loadClass 要**点号**二进制名；传 JNI 斜杠名
+  // （com/namelessric/...）会 ClassNotFoundException —— 1.0.24 就是这么挂的。
+  const rs = read('src-tauri/src/lib.rs')
+  const codeOnly = rs.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+  assert.ok(!/loadClass\s*\(/.test(codeOnly), 'Rust 里又用 loadClass 动态加载类了')
+  assert.ok(/COOKIE_CLASS/.test(codeOnly), '没有缓存 CookieBridgeNative 的类引用')
+  assert.ok(/find_class\(\s*"com\/namelessric\/dsh_mobile\/CookieBridgeNative"/.test(codeOnly),
+    '没有在 nativeInitBridge 里 find_class 缓存（find_class 才吃斜杠名）')
+})
+
 test('D2 Rust 注册了四条 cookie 命令', () => {
   const rs = read('src-tauri/src/lib.rs')
   for (const cmd of ['android_cookie_sites', 'android_clear_site_cookies',

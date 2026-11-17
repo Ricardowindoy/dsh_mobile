@@ -502,53 +502,70 @@ async fn desktop_clear_site_cookies(
 //
 // JNI 包名转义：com.namelessric.dsh_mobile → com/namelessric/dsh_1mobile。
 
+/// 取 CookieBridgeNative 的 Class 局部引用（缓存的是全局引用，每次要新 local）。
+/// 走 nativeInitBridge 里 find_class 缓存的那份，**不再**用
+/// `getClassLoader().loadClass()`：那条路要传点号二进制名，传 JNI 斜杠名会
+/// ClassNotFoundException（1.0.24 真机事故），而且每次调用白做三次反射。
 #[cfg(target_os = "android")]
-fn call_cookie_bridge(method: &str, sig: &str, args: &[jni::objects::JValue]) -> Result<String, String> {
-    use jni::objects::{JClass, JObject};
+fn cookie_bridge_class<'a>(
+    env: &mut jni::JNIEnv<'a>,
+) -> Result<jni::objects::JClass<'a>, String> {
+    let global = android_bridge::COOKIE_CLASS
+        .get()
+        .ok_or("CookieBridgeNative 类引用缺失（nativeInitBridge 未缓存？）")?;
+    let local = env
+        .new_local_ref(global.as_obj())
+        .map_err(|e| format!("CookieBridgeNative 类引用失效: {e}"))?;
+    Ok(jni::objects::JClass::from(local))
+}
 
+#[cfg(target_os = "android")]
+fn call_cookie_bridge(method: &str, sig: &str, str_args: &[&str]) -> Result<String, String> {
     let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
     let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
-    // CookieBridgeNative 是应用类：attached 线程的 find_class 看不到，
-    // 必须经 activity 的 classloader 加载（同 notify 的坑）。
-    let act = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
-    let activity: &JObject = act.as_obj();
-    let cls_obj = env
-        .call_method(activity, "getClass", "()Ljava/lang/Class;", &[])
-        .map_err(|e| format!("getClass: {e}"))?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let loader = env
-        .call_method(&cls_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-        .map_err(|e| format!("getClassLoader: {e}"))?
-        .l()
-        .map_err(|e| e.to_string())?;
-    let name = env
-        .new_string("com/namelessric/dsh_mobile/CookieBridgeNative")
-        .map_err(|e| e.to_string())?;
-    let cls = env
-        .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[(&name).into()])
-        .map_err(|e| format!("loadClass CookieBridgeNative: {e}"))?
-        .l()
-        .map_err(|e| e.to_string())?;
 
-    // 方法名与签名直接传 &str（jni 的 Into<JNIString> 对 &str 实现）——
-    // &JString 反而没有（实测编译错）。
-    let ret = env
-        .call_static_method(
-            JClass::from(cls),
-            method,
-            sig,
-            args,
-        )
-        .map_err(|e| format!("CookieBridgeNative.{method}: {e}"))?;
-    match ret {
-        jni::objects::JValueOwned::Object(o) => {
-            let s = env
-                .get_string((&o).into())
-                .map_err(|e| format!("get_string: {e}"))?;
-            Ok(s.to_string_lossy().into_owned())
+    let outcome = (|| -> Result<String, String> {
+        let cls = cookie_bridge_class(&mut env)?;
+        // 字符串参数必须在本 env 里现造（JString 绑 env 的 local frame，
+        // 跨 env 传是未定义行为），所以这一层统一收 &str 而不是 JValue。
+        let jstrings = str_args
+            .iter()
+            .map(|a| env.new_string(a))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{method} 参数构造失败: {e}"))?;
+        let jargs: Vec<jni::objects::JValue> = jstrings
+            .iter()
+            // JString 对 JObject 有 Deref，&JString 会自动强转成 &JObject。
+            .map(|s| jni::objects::JValue::Object(s))
+            .collect();
+        let ret = env
+            .call_static_method(cls, method, sig, &jargs)
+            .map_err(|e| format!("{method} 调用失败: {e}"))?;
+        match ret {
+            jni::objects::JValueOwned::Object(o) => {
+                let s = env
+                    .get_string((&o).into())
+                    .map_err(|e| format!("{method} 返回值读取失败: {e}"))?;
+                Ok(s.to_string_lossy().into_owned())
+            }
+            other => Err(format!("{method} 返回了非对象类型: {other:?}")),
         }
-        _ => Err("unexpected return type".into()),
+    })();
+
+    match outcome {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            // jni crate 报 JavaException 时【不】带 Java 侧的类名与消息，只给
+            // 一句 "Java exception was raised during method invocation" ——
+            // 拿不到真因就没法定位（1.0.24 现场就是这样，日志里只有这一句）。
+            // 这里补上类名+getMessage，并清掉挂起异常（不清会让 ART 回抛）。
+            let detail = crate::jni_pending_exception(&mut env);
+            let _ = env.exception_clear();
+            Err(match detail {
+                Some(d) => format!("{e}（Java: {d}）"),
+                None => e,
+            })
+        }
     }
 }
 
@@ -560,7 +577,15 @@ fn android_cookie_sites() -> Result<Vec<Value>, String> {
     let raw = call_cookie_bridge("listSites", "()Ljava/lang/String;", &[])?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("cookie 列表解析失败: {e}"))?;
-    Ok(parsed.as_array().cloned().unwrap_or_default())
+    // Kotlin 侧不跨 JNI 抛异常，失败时回 {"error": "..."}。必须把它当错误往上
+    // 报 —— 当成空数组的话，UI 会显示"没有保存登录 cookie 的站点"，那是在撒谎。
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    parsed
+        .as_array()
+        .cloned()
+        .ok_or_else(|| format!("cookie 列表格式异常: {raw}"))
 }
 
 /// 清一个站点（及其子域）的 cookie。cookie_names 空 = 该域全部。
@@ -573,57 +598,17 @@ fn android_clear_site_cookies(site: String, cookie_names: Vec<String>) -> Result
     }
     let names_json = serde_json::to_string(&cookie_names)
         .map_err(|e| format!("序列化 cookie 名失败: {e}"))?;
-    // 两个 String 参数要在本次 attach 的 env 里构造（JString 不能跨 env），
-    // 所以 clearSite 的调用单独开一段：先 attach，构造参数，再调桥。
-    let raw = {
-        let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
-        let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
-        let activity = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
-        let _ = activity.as_obj(); // 确认桥已初始化
-        let s = env.new_string(&site).map_err(|e| e.to_string())?;
-        let n = env.new_string(&names_json).map_err(|e| e.to_string())?;
-        // 这里不能走 call_cookie_bridge（它重新 attach 会拿到新 env，参数里的
-        // JString 就跨 env 了）——直接在本 env 里调完整流程。
-        use jni::objects::JClass;
-        let cls_obj = env
-            .call_method(activity.as_obj(), "getClass", "()Ljava/lang/Class;", &[])
-            .map_err(|e| format!("getClass: {e}"))?
-            .l()
-            .map_err(|e| e.to_string())?;
-        let loader = env
-            .call_method(&cls_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
-            .map_err(|e| format!("getClassLoader: {e}"))?
-            .l()
-            .map_err(|e| e.to_string())?;
-        let cname = env
-            .new_string("com/namelessric/dsh_mobile/CookieBridgeNative")
-            .map_err(|e| e.to_string())?;
-        let cls = env
-            .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[(&cname).into()])
-            .map_err(|e| format!("loadClass CookieBridgeNative: {e}"))?
-            .l()
-            .map_err(|e| e.to_string())?;
-        // 方法名直接传 &str（同 call_cookie_bridge 的坑）。
-        let ret = env
-            .call_static_method(
-                JClass::from(cls),
-                "clearSite",
-                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-                &[(&s).into(), (&n).into()],
-            )
-            .map_err(|e| format!("CookieBridgeNative.clearSite: {e}"))?;
-        match ret {
-            jni::objects::JValueOwned::Object(o) => {
-                let s = env
-                    .get_string((&o).into())
-                    .map_err(|e| format!("get_string: {e}"))?;
-                s.to_string_lossy().into_owned()
-            }
-            _ => return Err("unexpected return type".into()),
-        }
-    };
+    // 参数在 call_cookie_bridge 内部现造 —— 这里只给 &str，不碰 env。
+    let raw = call_cookie_bridge(
+        "clearSite",
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        &[&site, &names_json],
+    )?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|e| format!("清理结果解析失败: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
     Ok(parsed)
 }
 
@@ -643,6 +628,13 @@ mod android_bridge {
     /// NotifyBridge 的 Class 全局引用：在 MainActivity.onCreate 的主线程里
     /// FindClass 能走应用 classloader；attached 线程里找不到应用类。
     pub static NOTIFY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+    /// CookieBridgeNative 的 Class 全局引用。同 NOTIFY_CLASS：必须在
+    /// nativeInitBridge（Java 主线程）里 find_class 缓存 —— attached 线程的
+    /// find_class 只看系统 classloader，看不到应用类。
+    /// ⚠️ 别改回「getClassLoader().loadClass(名字)」那套：`ClassLoader.loadClass`
+    /// 要的是点号二进制名（com.a.B），传 JNI 斜杠名（com/a/B）会抛
+    /// ClassNotFoundException —— 1.0.24 就是这么在真机上挂的。
+    pub static COOKIE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
     /// 包名 com.namelessric.dsh_mobile 的 JNI 段为 com/namelessric/dsh_1mobile
     /// （下划线转义成 _1），对应 Kotlin MainActivity companion 里的
@@ -662,6 +654,12 @@ mod android_bridge {
         if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/NotifyBridge") {
             if let Ok(g) = env.new_global_ref(&cls) {
                 let _ = NOTIFY_CLASS.set(g);
+            }
+        }
+        // 同上：find_class 在这里能用应用 classloader；缓存给 cookie 命令复用。
+        if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/CookieBridgeNative") {
+            if let Ok(g) = env.new_global_ref(&cls) {
+                let _ = COOKIE_CLASS.set(g);
             }
         }
     }
