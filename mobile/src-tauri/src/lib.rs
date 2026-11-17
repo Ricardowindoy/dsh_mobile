@@ -75,7 +75,9 @@ pub fn run() {
         pair_refresh,
         read_clipboard,
         read_crash_log,
-        take_pending_session
+        take_pending_session,
+        desktop_cookie_sites,
+        desktop_clear_site_cookies
     ]);
     #[cfg(target_os = "android")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -91,7 +93,9 @@ pub fn run() {
         read_crash_log,
         notify::notify_start,
         notify::notify_stop,
-        take_pending_session
+        take_pending_session,
+        android_cookie_sites,
+        android_clear_site_cookies
     ]);
     builder
         // loopback 插件暂不注册（白屏根因，见 loopback_oauth.rs 顶部说明）。
@@ -387,6 +391,237 @@ async fn pair_refresh(relay_url: String, device_token: String) -> Result<Value, 
         .await
         .map_err(|e| format!("读取 relay 响应失败: {e}"))?;
     serde_json::from_slice(&bytes).map_err(|e| format!("relay 响应解析失败: {e}"))
+}
+
+// --- 登录 cookie 管理（桌面端） ---------------------------------------------
+//
+// 场景：GUI 的内嵌浏览器面板（iframe）里登录 JetHub 插件跳转的 Trae/WorkBuddy
+// 等外部站点后，登录态落在本 App WebView 的 cookie store 里。用户切换账号时
+// 需要按站点清掉对应 cookie —— 全清会把 DSH 自身的登录态一起杀掉，所以按站点。
+//
+// 平台差异（tauri 2.12 实读源码结论）：
+//   · 桌面三平台 cookies()/cookies_for_url()/delete_cookie() 都可用，Cookie 带
+//     domain()/path()（wry 各自的 cookie_from_* 转换都填了 domain）→ 这里直接
+//     枚举全部 cookie、按 domain 分组、精确删除。
+//   · Android：cookies() 恒返回空 Vec（wry android 未实现）→ 前端改走
+//     android_cookie_* 命令（JNI → CookieManager），见 android_cookie_sites。
+
+/// 归一化 cookie 域名用于分组展示与匹配：剥掉前导点，统一小写。
+/// （`.example.com` 与 `example.com` 是同一个站点。）
+/// 仅桌面路径使用（Android 走 JNI，域名归一在 Kotlin 侧）。
+#[cfg(not(target_os = "android"))]
+fn cookie_site(domain: &str) -> String {
+    domain.trim_start_matches('.').to_lowercase()
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn desktop_cookie_sites(app: tauri::AppHandle) -> Result<Vec<Value>, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("主窗口不存在")?;
+    // cookies() 返回 store 里全部 cookie（含 HttpOnly）。Windows 上在同步
+    // 命令里调用会死锁（wry 注释与 Webview2 issue 明说），必须 async 命令 +
+    // spawn_blocking —— 这里已是 async 命令，但 wry 内部还要 pump 消息循环，
+    // 再挪到独立线程最稳。
+    tauri::async_runtime::spawn_blocking(move || {
+        let cookies = window
+            .cookies()
+            .map_err(|e| format!("枚举 cookie 失败: {e}"))?;
+        // 按 site 分组：site → {count, names}。name 列表给人看，同一站点
+        // 多枚 cookie 折叠成一行。
+        let mut sites: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for c in &cookies {
+            let domain = c.domain().unwrap_or("");
+            if domain.is_empty() {
+                continue;
+            }
+            sites
+                .entry(cookie_site(domain))
+                .or_default()
+                .push(c.name().to_string());
+        }
+        Ok(sites
+            .into_iter()
+            .map(|(site, names)| {
+                json!({ "site": site, "cookieCount": names.len(), "names": names })
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("枚举任务失败: {e}"))?
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn desktop_clear_site_cookies(
+    app: tauri::AppHandle,
+    site: String,
+) -> Result<Value, String> {
+    let target = cookie_site(&site);
+    if target.is_empty() {
+        return Err("站点名为空".into());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or("主窗口不存在")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cookies = window
+            .cookies()
+            .map_err(|e| format!("枚举 cookie 失败: {e}"))?;
+        let mut deleted = 0usize;
+        let mut failed = 0usize;
+        for c in &cookies {
+            let domain = c.domain().unwrap_or("");
+            // 精确匹配归一化域名：清 trae.net 不碰 my.trae.net 之外的子域策略
+            // —— cookie domain 写的是什么就比什么（wry 返回的就是 store 里的
+            // 原样 domain），不做后缀匹配，避免误删其它站点。
+            if cookie_site(domain) != target {
+                continue;
+            }
+            match window.delete_cookie(c) {
+                Ok(()) => deleted += 1,
+                Err(_) => failed += 1,
+            }
+        }
+        Ok(json!({ "deleted": deleted, "failed": failed }))
+    })
+    .await
+    .map_err(|e| format!("清理任务失败: {e}"))?
+}
+
+// --- Android：按站点清登录 cookie（JNI → CookieManager）---------------------
+//
+// 桌面用 webview 原生 cookie API（上面两个命令）；Android 的 wry 没实现
+// cookies()（恒空 Vec），且系统 CookieManager 是唯一能读到 HttpOnly cookie
+// 的入口 → 走 JNI 调 Kotlin CookieBridgeNative。
+//
+// JNI 包名转义：com.namelessric.dsh_mobile → com/namelessric/dsh_1mobile。
+
+#[cfg(target_os = "android")]
+fn call_cookie_bridge(method: &str, sig: &str, args: &[jni::objects::JValue]) -> Result<String, String> {
+    use jni::objects::{JClass, JObject};
+
+    let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
+    let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
+    // CookieBridgeNative 是应用类：attached 线程的 find_class 看不到，
+    // 必须经 activity 的 classloader 加载（同 notify 的坑）。
+    let act = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
+    let activity: &JObject = act.as_obj();
+    let cls_obj = env
+        .call_method(activity, "getClass", "()Ljava/lang/Class;", &[])
+        .map_err(|e| format!("getClass: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let loader = env
+        .call_method(&cls_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+        .map_err(|e| format!("getClassLoader: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let name = env
+        .new_string("com/namelessric/dsh_mobile/CookieBridgeNative")
+        .map_err(|e| e.to_string())?;
+    let cls = env
+        .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[(&name).into()])
+        .map_err(|e| format!("loadClass CookieBridgeNative: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+
+    // 方法名与签名直接传 &str（jni 的 Into<JNIString> 对 &str 实现）——
+    // &JString 反而没有（实测编译错）。
+    let ret = env
+        .call_static_method(
+            JClass::from(cls),
+            method,
+            sig,
+            args,
+        )
+        .map_err(|e| format!("CookieBridgeNative.{method}: {e}"))?;
+    match ret {
+        jni::objects::JValueOwned::Object(o) => {
+            let s = env
+                .get_string((&o).into())
+                .map_err(|e| format!("get_string: {e}"))?;
+            Ok(s.to_string_lossy().into_owned())
+        }
+        _ => Err("unexpected return type".into()),
+    }
+}
+
+/// 列出 WebView cookie store 里有 cookie 的站点。
+/// 返回 [{site, cookieCount, names[]}]。
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_cookie_sites() -> Result<Vec<Value>, String> {
+    let raw = call_cookie_bridge("listSites", "()Ljava/lang/String;", &[])?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("cookie 列表解析失败: {e}"))?;
+    Ok(parsed.as_array().cloned().unwrap_or_default())
+}
+
+/// 清一个站点（及其子域）的 cookie。cookie_names 空 = 该域全部。
+/// 返回 {requested, cleared}。
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_clear_site_cookies(site: String, cookie_names: Vec<String>) -> Result<Value, String> {
+    if site.trim().is_empty() {
+        return Err("站点名为空".into());
+    }
+    let names_json = serde_json::to_string(&cookie_names)
+        .map_err(|e| format!("序列化 cookie 名失败: {e}"))?;
+    // 两个 String 参数要在本次 attach 的 env 里构造（JString 不能跨 env），
+    // 所以 clearSite 的调用单独开一段：先 attach，构造参数，再调桥。
+    let raw = {
+        let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
+        let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
+        let activity = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
+        let _ = activity.as_obj(); // 确认桥已初始化
+        let s = env.new_string(&site).map_err(|e| e.to_string())?;
+        let n = env.new_string(&names_json).map_err(|e| e.to_string())?;
+        // 这里不能走 call_cookie_bridge（它重新 attach 会拿到新 env，参数里的
+        // JString 就跨 env 了）——直接在本 env 里调完整流程。
+        use jni::objects::JClass;
+        let cls_obj = env
+            .call_method(activity.as_obj(), "getClass", "()Ljava/lang/Class;", &[])
+            .map_err(|e| format!("getClass: {e}"))?
+            .l()
+            .map_err(|e| e.to_string())?;
+        let loader = env
+            .call_method(&cls_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+            .map_err(|e| format!("getClassLoader: {e}"))?
+            .l()
+            .map_err(|e| e.to_string())?;
+        let cname = env
+            .new_string("com/namelessric/dsh_mobile/CookieBridgeNative")
+            .map_err(|e| e.to_string())?;
+        let cls = env
+            .call_method(&loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", &[(&cname).into()])
+            .map_err(|e| format!("loadClass CookieBridgeNative: {e}"))?
+            .l()
+            .map_err(|e| e.to_string())?;
+        // 方法名直接传 &str（同 call_cookie_bridge 的坑）。
+        let ret = env
+            .call_static_method(
+                JClass::from(cls),
+                "clearSite",
+                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                &[(&s).into(), (&n).into()],
+            )
+            .map_err(|e| format!("CookieBridgeNative.clearSite: {e}"))?;
+        match ret {
+            jni::objects::JValueOwned::Object(o) => {
+                let s = env
+                    .get_string((&o).into())
+                    .map_err(|e| format!("get_string: {e}"))?;
+                s.to_string_lossy().into_owned()
+            }
+            _ => return Err("unexpected return type".into()),
+        }
+    };
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("清理结果解析失败: {e}"))?;
+    Ok(parsed)
 }
 
 // --- Android JNI 桥 ---------------------------------------------------------

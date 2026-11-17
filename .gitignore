@@ -110,3 +110,4 @@ remote-access-plugin/pnpm-lock.yaml
 
 # remote-access 插件 UI 改造的验证工作台（另一会话的隔离工作区）
 .verify-ui/
+.probe/

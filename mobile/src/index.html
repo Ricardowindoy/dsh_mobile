@@ -139,6 +139,25 @@
             </button>
           </div>
         </section>
+        <!-- 登录站点清理面板：语义 sheet（同更新卡，18px 层级 + 底部升起）。
+             列出 WebView 里实际存有 cookie 的登录站点；每行一个「清除」动作。
+             保护行（dsh 自身登录态）始终置顶显示且不可清 —— 原理上按 site
+             过滤已不可能命中 dsh 域，但把"这条不能清"画出来是诚实，不是装饰。 -->
+        <section id="cookie-panel" class="card update-card" hidden>
+          <p class="update-title">登录站点清理</p>
+          <p class="update-meta">列出 App 里保存了登录 cookie 的外部站点；清除后下次打开该站点需重新登录。dsh 自身的登录态不受影响。</p>
+          <div id="cookie-list" class="cookie-list"></div>
+          <p id="cookie-panel-note" class="update-note" hidden></p>
+          <div class="update-actions">
+            <button id="cookie-close" class="icon-btn" type="button" aria-label="关闭" title="关闭">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+            <button id="cookie-refresh" class="btn-primary btn-primary--with-icon" type="button">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              <span>重新扫描</span>
+            </button>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -148,6 +167,14 @@
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       </button>
       <span id="push-log-status" class="push-log-status" hidden></span>
+      <!-- 登录站点清理：清外部登录站（Trae/WorkBuddy 等）的 cookie 以切换账号。
+           按 site 粒度清，绝不碰 dsh_relay_device / dsh_relay_token（那是本 App
+           自己的登录态，清了就要重新扫码）。详情面板是语义 sheet（同更新卡）。 -->
+      <button id="cookie-clear" class="icon-btn" type="button"
+              aria-label="登录站点清理" title="登录站点清理">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+      </button>
+      <span id="cookie-clear-status" class="push-log-status" hidden></span>
     </div>
   </main>
 

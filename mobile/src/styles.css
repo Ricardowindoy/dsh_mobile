@@ -758,6 +758,74 @@ main {
 .update-actions .icon-btn { width: auto; min-width: var(--set-tap); height: auto; min-height: var(--set-tap); }
 .update-actions .btn-primary { margin-top: 0; flex: 1; }
 
+/* ---------- 登录站点清理面板（复用 .update-card 的 sheet 骨架） ---------- */
+/* 行 = 左列竖排（站点 / 计数 / cookie 名）+ 右列一枚清除钮。
+   早期版本把三者排成三列横排，420 宽下互相抢宽度、文件名被压成一条缝
+   （截图实测），故改竖排：每行只占两列，任何宽度下都稳。 */
+.cookie-list {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cookie-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  min-height: var(--set-tap);
+  min-width: 0;
+}
+.cookie-row + .cookie-row { box-shadow: inset 0 1px 0 var(--set-line); }
+
+.cookie-row-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cookie-row-site {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -.003em;
+  color: var(--set-text);
+  overflow-wrap: anywhere;
+}
+
+.cookie-row-count {
+  font-size: 12px;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--set-text-2);
+}
+
+.cookie-row-names {
+  font-size: 11px;
+  line-height: 1.45;
+  letter-spacing: .01em;
+  color: var(--set-text-2);
+  overflow-wrap: anywhere;
+  /* 名字摘要最多两行：完整名单不重要，「有哪些痕迹」才重要 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.cookie-clear-one {
+  flex: 0 0 auto;
+  align-self: center;
+  min-height: var(--set-tap);
+  padding: 0 16px;
+  font-size: 13px;
+  margin: 0;
+}
+
+
+
 /* ---------- 下载源选择：一行 label + 原生 select ---------- */
 .update-source-row {
   display: flex;

@@ -20,6 +20,7 @@ import {
   platformArchFromUA,
 } from "./update-source.js";
 import { pctOf, progressLabel } from "./update-progress.js";
+import { normalizeCookieSites } from "./cookie-sites.js";
 
 const setupEl = document.getElementById("setup");
 const statusEl = document.getElementById("status");
@@ -44,6 +45,13 @@ const updateProgressCountEl = document.getElementById("update-progress-count");
 const updateSourceEl = document.getElementById("update-source");
 const pushLogBtn = document.getElementById("push-log");
 const pushLogStatus = document.getElementById("push-log-status");
+const cookieClearBtn = document.getElementById("cookie-clear");
+const cookieClearStatus = document.getElementById("cookie-clear-status");
+const cookiePanel = document.getElementById("cookie-panel");
+const cookieList = document.getElementById("cookie-list");
+const cookiePanelNote = document.getElementById("cookie-panel-note");
+const cookieCloseBtn = document.getElementById("cookie-close");
+const cookieRefreshBtn = document.getElementById("cookie-refresh");
 const selfCheckBtn = document.getElementById("self-check");
 const selfCheckStatusEl = document.getElementById("self-check-status");
 
@@ -1237,6 +1245,135 @@ pushLogBtn.addEventListener("click", async () => {
   const ok = await pushLogs(relay, pushCfg?.deviceToken || pushCfg?.accessToken || "");
   setStatusText(pushLogStatus, ok ? "日志已推送到服务器" : "推送失败", ok ? "ok" : "bad");
   log(`push logs to ${relay} -> ${ok ? "ok" : "fail"}`);
+});
+
+// --- 登录站点清理 --------------------------------------------------------------
+//
+// 场景：GUI 的内嵌浏览器面板里登录 JetHub 插件跳转的 Trae/WorkBuddy 等外部
+// 站点后，登录态存在本 App WebView 的 cookie store 里；切换账号 = 清掉对应
+// 站点的 cookie 再重新登录。按 site 粒度清，不碰 dsh 的登录 cookie。
+//
+// 平台差异（决定命令选择）：
+//   · 桌面：Tauri 原生 cookies()/delete_cookie()，能枚举全 store → 站点列表
+//     就是真实存储状态；
+//   · Android：wry 的 cookies() 恒空（未实现），系统 CookieManager 只能按 URL
+//     查 → 站点列表来自原生侧的已知登录域探测（CookieBridge.kt），
+//     只报"实际有 cookie"的域。
+let cookieSitesCache = null;
+
+/** 拉站点列表：桌面与 Android 各走各的命令，归一化交给 cookie-sites.js。 */
+async function fetchCookieSites() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const android = /android/i.test(navigator.userAgent || "");
+  const raw = android
+    ? await invoke("android_cookie_sites")
+    : await invoke("desktop_cookie_sites");
+  // 过滤规则（保护 cookie、空行）在纯函数里，单测与变异检验都钉住了。
+  return normalizeCookieSites(raw);
+}
+
+function renderCookieSites(sites) {
+  cookieList.textContent = "";
+  if (!sites.length) {
+    cookiePanelNote.hidden = false;
+    cookiePanelNote.textContent = "没有找到保存了登录 cookie 的外部站点。";
+    return;
+  }
+  cookiePanelNote.hidden = true;
+  for (const s of sites) {
+    const row = document.createElement("div");
+    row.className = "cookie-row";
+
+    // 布局：左侧一列竖排「站点 / 计数 / cookie 名」，右侧一枚清除钮。
+    // 早期版本把站点名、计数、文件名排成三列横排 —— 420 宽下三列互相抢
+    // 宽度，文件名被压成一条缝（截图实测）。竖排后每行只占两列，宽度稳定。
+    const info = document.createElement("div");
+    info.className = "cookie-row-info";
+    const siteEl = document.createElement("span");
+    siteEl.className = "cookie-row-site";
+    siteEl.textContent = s.site;
+    const countEl = document.createElement("span");
+    countEl.className = "cookie-row-count";
+    countEl.textContent = `${s.cookieCount} 枚 cookie`;
+    const names = document.createElement("span");
+    names.className = "cookie-row-names";
+    names.textContent = s.names.slice(0, 4).join("、") + (s.names.length > 4 ? ` 等 ${s.names.length} 枚` : "");
+    info.append(siteEl, countEl, names);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-secondary cookie-clear-one";
+    btn.textContent = "清除";
+    btn.setAttribute("aria-label", `清除 ${s.site} 的登录 cookie`);
+    btn.addEventListener("click", () => { void clearOneSite(s.site, btn); });
+
+    row.append(info, btn);
+    cookieList.append(row);
+  }
+}
+
+async function loadCookieSites() {
+  cookieList.textContent = "";
+  cookiePanelNote.hidden = false;
+  cookiePanelNote.textContent = "扫描中…";
+  try {
+    const sites = await fetchCookieSites();
+    cookieSitesCache = sites;
+    renderCookieSites(sites);
+    log(`cookie sites: ${sites.map((s) => `${s.site}(${s.cookieCount})`).join(", ") || "none"}`);
+  } catch (e) {
+    cookiePanelNote.hidden = false;
+    cookiePanelNote.textContent = `扫描失败：${errMsg(e)}`;
+    log(`cookie sites scan failed: ${errMsg(e)}`);
+  }
+}
+
+async function clearOneSite(site, btn) {
+  const ok = window.confirm(
+    `清除 ${site} 的登录 cookie？\n\n该站点的登录状态会丢失，下次打开需要重新登录。dsh 自身的登录不受影响。`,
+  );
+  if (!ok) return;
+  const row = cookieSitesCache?.find((s) => s.site === site);
+  btn.disabled = true;
+  btn.textContent = "清除中…";
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const android = /android/i.test(navigator.userAgent || "");
+    // names 只作提示用途；Android 端按 names 精确过期，桌面端按 domain 全删
+    // （桌面 delete_cookie 按 name+domain+path 精确匹配，传名字反而会漏）。
+    const res = android
+      ? await invoke("android_clear_site_cookies", { site, cookieNames: row?.names || [] })
+      : await invoke("desktop_clear_site_cookies", { site });
+    const cleared = Number(res?.cleared ?? res?.deleted ?? 0);
+    const failed = Number(res?.failed ?? 0);
+    log(`cookie clear ${site}: cleared=${cleared} failed=${failed}`);
+    if (cleared > 0) {
+      setStatusText(cookieClearStatus, `${site} 已清除 ${cleared} 枚 cookie`, "ok");
+    } else if (failed > 0) {
+      setStatusText(cookieClearStatus, `${site} 清除失败（${failed} 枚）`, "bad");
+    } else {
+      // 如实说"没清到任何东西"，不兜底成成功。
+      setStatusText(cookieClearStatus, `${site} 没有可清的 cookie`, undefined);
+    }
+    await loadCookieSites();
+  } catch (e) {
+    setStatusText(cookieClearStatus, `清除失败：${errMsg(e)}`, "bad");
+    log(`cookie clear ${site} failed: ${errMsg(e)}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "清除";
+  }
+}
+
+cookieClearBtn?.addEventListener("click", () => {
+  cookiePanel.hidden = false;
+  void loadCookieSites();
+});
+cookieCloseBtn?.addEventListener("click", () => {
+  cookiePanel.hidden = true;
+});
+cookieRefreshBtn?.addEventListener("click", () => {
+  void loadCookieSites();
 });
 
 // Boot: 已配置则先检查更新——有新版本时停在设置页展示更新横幅
