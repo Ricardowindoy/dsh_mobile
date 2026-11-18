@@ -10,6 +10,11 @@
 //   G3 每行「清除」按钮 ≥44px
 //   G4 420 与 900 两档都无横向溢出
 //   G5 面板说明文字里出现「不影响 dsh」类表述（用户敢不敢点取决于此）
+//   G6 滚到底时最后一行在底栏之上（可点，不被磨砂底栏盖住）
+//   G7 「清除全部站点数据」按钮存在、可见、≥44px，且不与上面的行重叠
+//   G8 点它 → 先 confirm、再调整店清理命令、然后**把配对信息写回**并重连
+//      （这条是用户要求的核心：清掉登录态但不丢配对；判据看 invoke 调用序列，
+//       不看"我调用了函数"）
 //
 // 跑法：node scripts/verify/cookie-panel-geometry.mjs
 // 前置：cd mobile && ./node_modules/.bin/vite build
@@ -50,6 +55,15 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const BASE = `http://127.0.0.1:${server.address().port}/`
 
+/* 已保存的 App 配置：真实配对产物 + 两个"无关偏好"（清理后不许被搬回来） */
+const SAVED_CFG = {
+  relayUrl: 'https://relay.example.com',
+  deviceToken: 'dtok-abc',
+  deviceId: 'dev-1',
+  updateSource: 'gitee',
+  ticket: undefined,
+}
+
 /* 喂给页面的假数据：两行可真清 + 一行全是保护项（必须被过滤掉） */
 const MOCK = [
   { site: 'www.trae.cn', cookieCount: 3, names: ['sid', 'uid', 'sso_token'] },
@@ -78,18 +92,29 @@ await send('Runtime.enable', {}, sessionId)
 
 // Tauri invoke 桩：必须在页面脚本执行前注入。
 const stub = `
+  window.__invokeLog = [];
+  window.__savedConfig = null;
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args) => {
       if (cmd === 'android_cookie_sites' || cmd === 'desktop_cookie_sites') return ${JSON.stringify(MOCK)};
       if (cmd === 'android_clear_site_cookies' || cmd === 'desktop_clear_site_cookies') return { requested: 2, cleared: 2, deleted: 2 };
-      if (cmd === 'load_config') return null;
+      if (cmd === 'android_wipe_web_data' || cmd === 'desktop_wipe_web_data') {
+        window.__invokeLog.push(cmd);
+        return { ok: true, remaining: 0, remainingHosts: [], storageCleared: true, formCleared: true };
+      }
+      if (cmd === 'save_config') { window.__savedConfig = args && args.config; window.__invokeLog.push(cmd); return null; }
+      // 喂一台**已配对**的设备：这是用户真实场景（"配对信息不要丢"），
+      // 也是 G8d 能验的东西 —— 配空配置量出来的结果证明不了任何事。
+      if (cmd === 'load_config') return ${JSON.stringify(SAVED_CFG)};
       if (cmd === 'read_crash_log') return '';
       if (cmd === 'boot_elapsed_ms') return 1;
       return null;
     },
     transformCallback: (cb) => { const id = Math.floor(Math.random() * 1e9); window['_' + id] = cb; return id; },
   };
-  window.confirm = () => true;
+  // 记录 confirm 文案（要验"清什么/留什么"是否说清），并一律确认。
+  window.__confirmTexts = [];
+  window.confirm = (msg) => { window.__confirmTexts.push(String(msg)); return true; };
 `
 await send('Page.addScriptToEvaluateOnNewDocument', { source: stub }, sessionId)
 
@@ -141,13 +166,49 @@ for (const vp of [{ w: 420, h: 760 }, { w: 900, h: 700 }]) {
           const b = bar.getBoundingClientRect()
           return { lastBottom: Math.round(last.bottom), barTop: Math.round(b.top) }
         })(),
+        wipeBtn: (() => {
+          const b = document.getElementById('cookie-wipe-all')
+          if (!b) return null
+          const box = b.getBoundingClientRect()
+          const rows = [...document.querySelectorAll('#cookie-list .cookie-row')]
+          const lastRow = rows.length ? rows[rows.length - 1].getBoundingClientRect() : null
+          return {
+            text: (b.textContent || '').trim(),
+            w: Math.round(box.width), h: Math.round(box.height),
+            visible: box.width > 0 && box.height > 0 && !b.hidden,
+            // 危险动作与每行的「清除」必须分开：间距 < 8px 会被误点。
+            gapFromRows: lastRow ? Math.round(box.top - lastRow.bottom) : null,
+          }
+        })(),
         noteText: (document.getElementById('cookie-panel-note')?.textContent || '').trim(),
         metaText: (panel?.querySelector('.update-meta')?.textContent || '').trim(),
         scrollWidth: doc.scrollWidth, clientWidth: doc.clientWidth,
       }
     })()`,
   }, sessionId)
-  results.push({ vp, m: result.value })
+  // G8：点「清除全部站点数据」，看 invoke 序列与写回的配置。
+  // 点之前先把面板滚回顶部，否则按钮可能在视口外（点击会落到别处）。
+  await send('Runtime.evaluate', {
+    sessionId,
+    expression: `(() => {
+      const sc = document.scrollingElement || document.documentElement
+      sc.scrollTop = sc.scrollHeight
+      const b = document.getElementById('cookie-wipe-all')
+      if (b) b.click()
+      return true
+    })()`,
+  }, sessionId)
+  await new Promise((r) => setTimeout(r, 1200))
+  const { result: after } = await send('Runtime.evaluate', {
+    sessionId, returnByValue: true,
+    expression: `({
+      log: window.__invokeLog.slice(),
+      saved: window.__savedConfig,
+      confirms: window.__confirmTexts.slice(),
+      status: (document.getElementById('cookie-clear-status')?.textContent || '').trim(),
+    })`,
+  }, sessionId)
+  results.push({ vp, m: result.value, after: after.value })
 }
 
 let failed = 0
@@ -155,7 +216,7 @@ const check = (name, ok, detail) => {
   console.log(`  ${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail}`}`)
   if (!ok) failed++
 }
-for (const { vp, m } of results) {
+for (const { vp, m, after } of results) {
   console.log(`\n=== ${vp.w}x${vp.h} ===`)
   check('G1 底栏按钮命中区 ≥44px', m.bottomBtnSizes.length >= 2 && m.bottomBtnSizes.every((b) => b.h >= 44),
     JSON.stringify(m.bottomBtnSizes))
@@ -170,6 +231,37 @@ for (const { vp, m } of results) {
   check('G6 滚到底时最后一行在底栏之上（可点）',
     !!m.lastRowVsBar && m.lastRowVsBar.lastBottom <= m.lastRowVsBar.barTop + 1,
     JSON.stringify(m.lastRowVsBar))
+  check('G7 整店清理按钮可见、≥44px、写明保留配对',
+    !!m.wipeBtn && m.wipeBtn.visible && m.wipeBtn.h >= 44 && /保留配对/.test(m.wipeBtn.text),
+    JSON.stringify(m.wipeBtn))
+  check('G7b 危险按钮与逐行「清除」有间距（不误触）',
+    !!m.wipeBtn && m.wipeBtn.gapFromRows !== null && m.wipeBtn.gapFromRows >= 8,
+    JSON.stringify(m.wipeBtn))
+
+  // G8：invoke 序列必须证明「清 → 写回配对 → 重连」，且配对凭据原样回来。
+  // 这里喂的 load_config 是 null（走 localStorage 兜底=空），所以真正能保住
+  // 配对的路径只有"清理前先读到"——这正是我们要钉住的那一步。
+  const a = after
+  const seq = a.log
+  const iWipe = seq.findIndex((c) => c.endsWith('_wipe_web_data'))
+  // ⚠️ 用 lastIndexOf：boot() 在页面就绪时会先把配置镜像写一遍（防旧版本只写
+  //    localStorage），那是清理**之前**的写，拿 indexOf 会误判成"写回在清理前"。
+  const iSave = seq.lastIndexOf('save_config')
+  check('G8 点按钮会先 confirm（危险动作）', a.confirms.length >= 1,
+    JSON.stringify(a.confirms))
+  check('G8b confirm 文案说清保留配对与免扫码',
+    a.confirms.some((t) => /配对信息/.test(t) && /不用再扫码/.test(t)),
+    JSON.stringify(a.confirms[0] || ''))
+  check('G8c 先调整店清理命令，再 save_config 写回配对',
+    iWipe >= 0 && iSave > iWipe, JSON.stringify(seq))
+  check('G8d 写回的是配对信息（凭据原样回来，无关偏好/一次性 ticket 不带）',
+    !!a.saved &&
+      a.saved.relayUrl === SAVED_CFG.relayUrl &&
+      a.saved.deviceToken === SAVED_CFG.deviceToken &&
+      a.saved.deviceId === SAVED_CFG.deviceId &&
+      !('updateSource' in a.saved) && !('ticket' in a.saved),
+    JSON.stringify(a.saved))
+  check('G8e 结果状态位报成功（复核 remaining=0）', /已清除全部站点数据/.test(a.status), a.status)
 }
 
 console.log(failed ? `\n❌ ${failed} 条断言不通过` : '\n✅ 全部断言通过')

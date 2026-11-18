@@ -77,7 +77,8 @@ pub fn run() {
         read_crash_log,
         take_pending_session,
         desktop_cookie_sites,
-        desktop_clear_site_cookies
+        desktop_clear_site_cookies,
+        desktop_wipe_web_data
     ]);
     #[cfg(target_os = "android")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -95,7 +96,8 @@ pub fn run() {
         notify::notify_stop,
         take_pending_session,
         android_cookie_sites,
-        android_clear_site_cookies
+        android_clear_site_cookies,
+        android_wipe_web_data
     ]);
     builder
         // loopback 插件暂不注册（白屏根因，见 loopback_oauth.rs 顶部说明）。
@@ -508,6 +510,50 @@ async fn desktop_clear_site_cookies(
     .map_err(|e| format!("清理任务失败: {e}"))?
 }
 
+/// 全量清理 WebView 浏览数据（桌面三平台）：cookie + localStorage + IndexedDB
+/// + 缓存，一次清到底。用的是 wry 的 `clear_all_browsing_data`（各平台分别
+/// 落到 `WebsiteDataManager.clear(ALL)` / `WKWebsiteDataStore.removeData` /
+/// `ICoreWebView2Profile2.ClearBrowsingDataAll`）。
+///
+/// **配对信息不在其中**：relayUrl / deviceToken / deviceId 由 Rust 写在 app
+/// 配置目录的 config.json 里，与 WebView 存储无关；清完之后前端用设备凭据换
+/// 一次性 ticket 重新登录。
+///
+/// 复核：清完再枚举一次 cookie，如实报 `remaining`。桌面的 `cookies()` 是
+/// 全量枚举（不像 Android 只能探清单），所以这里的数字是真实残留总量。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+async fn desktop_wipe_web_data(app: tauri::AppHandle) -> Result<Value, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("主窗口不存在")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Windows 上在同步上下文里碰 WebView2 会死锁（同 desktop_cookie_sites），
+        // 所以整段都待在 spawn_blocking 里。
+        window
+            .clear_all_browsing_data()
+            .map_err(|e| format!("清理浏览数据失败: {e}"))?;
+        // 复核：清完再枚举，报真实残留而不是「我调用成功了」。
+        let after = window
+            .cookies()
+            .map_err(|e| format!("复核枚举失败: {e}"))?;
+        let mut hosts: Vec<String> = after
+            .iter()
+            .map(|c| cookie_site(c.domain().unwrap_or("")))
+            .filter(|s| !s.is_empty())
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        Ok(json!({
+            "ok": after.is_empty(),
+            "remaining": after.len(),
+            "remainingHosts": hosts,
+        }))
+    })
+    .await
+    .map_err(|e| format!("清理任务失败: {e}"))?
+}
+
 // --- Android：按站点清登录 cookie（JNI → CookieManager）---------------------
 //
 // 桌面用 webview 原生 cookie API（上面两个命令）；Android 的 wry 没实现
@@ -520,26 +566,55 @@ async fn desktop_clear_site_cookies(
 /// 走 nativeInitBridge 里 find_class 缓存的那份，**不再**用
 /// `getClassLoader().loadClass()`：那条路要传点号二进制名，传 JNI 斜杠名会
 /// ClassNotFoundException（1.0.24 真机事故），而且每次调用白做三次反射。
+///
+/// 两个桥共用这一条路径：传进来的是缓存槽（`OnceLock<GlobalRef>`）而不是
+/// 类名，这样「哪个类」在编译期就定死了，也不会退化成按名字反射。
 #[cfg(target_os = "android")]
-fn cookie_bridge_class<'a>(
+fn bridge_class<'a>(
     env: &mut jni::JNIEnv<'a>,
+    slot: &'static std::sync::OnceLock<jni::objects::GlobalRef>,
+    label: &str,
 ) -> Result<jni::objects::JClass<'a>, String> {
-    let global = android_bridge::COOKIE_CLASS
+    let global = slot
         .get()
-        .ok_or("CookieBridgeNative 类引用缺失（nativeInitBridge 未缓存？）")?;
+        .ok_or_else(|| format!("{label} 类引用缺失（nativeInitBridge 未缓存？）"))?;
     let local = env
         .new_local_ref(global.as_obj())
-        .map_err(|e| format!("CookieBridgeNative 类引用失效: {e}"))?;
+        .map_err(|e| format!("{label} 类引用失效: {e}"))?;
     Ok(jni::objects::JClass::from(local))
 }
 
 #[cfg(target_os = "android")]
 fn call_cookie_bridge(method: &str, sig: &str, str_args: &[&str]) -> Result<String, String> {
+    call_bridge(
+        "CookieBridgeNative",
+        &android_bridge::COOKIE_CLASS,
+        method,
+        sig,
+        str_args,
+    )
+}
+
+#[cfg(target_os = "android")]
+fn call_wipe_bridge(method: &str, sig: &str) -> Result<String, String> {
+    call_bridge("WebDataWipeNative", &android_bridge::WIPE_CLASS, method, sig, &[])
+}
+
+/// 两个 JNI 桥的共同调用路径：取类 → 造字符串参数 → call_static_method →
+/// 读回 String。差异只在「从哪个缓存槽取类引用」，槽由调用方传入。
+#[cfg(target_os = "android")]
+fn call_bridge<'a>(
+    label: &str,
+    slot: &'static std::sync::OnceLock<jni::objects::GlobalRef>,
+    method: &str,
+    sig: &str,
+    str_args: &[&str],
+) -> Result<String, String> {
     let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
     let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
 
     let outcome = (|| -> Result<String, String> {
-        let cls = cookie_bridge_class(&mut env)?;
+        let cls = bridge_class(&mut env, slot, label)?;
         // 字符串参数必须在本 env 里现造（JString 绑 env 的 local frame，
         // 跨 env 传是未定义行为），所以这一层统一收 &str 而不是 JValue。
         let jstrings = str_args
@@ -573,11 +648,13 @@ fn call_cookie_bridge(method: &str, sig: &str, str_args: &[&str]) -> Result<Stri
             // 一句 "Java exception was raised during method invocation" ——
             // 拿不到真因就没法定位（1.0.24 现场就是这样，日志里只有这一句）。
             // 这里补上类名+getMessage，并清掉挂起异常（不清会让 ART 回抛）。
+            // label 也拼进去：现在有两个 JNI 桥，日志里必须能一眼看出是哪一个
+            // 类挂的（同一个方法名 li 在别的类里可能有别的故障模式）。
             let detail = crate::jni_pending_exception(&mut env);
             let _ = env.exception_clear();
             Err(match detail {
-                Some(d) => format!("{e}（Java: {d}）"),
-                None => e,
+                Some(d) => format!("{label}.{e}（Java: {d}）"),
+                None => format!("{label}.{e}"),
             })
         }
     }
@@ -626,6 +703,27 @@ fn android_clear_site_cookies(site: String, cookie_names: Vec<String>) -> Result
     Ok(parsed)
 }
 
+/// 全量清理 WebView 站点数据（cookie / localStorage / IndexedDB / 表单与
+/// HTTP 认证缓存 / 网页缓存），**配对信息不在其中**。
+///
+/// 与 [android_clear_site_cookies] 的分工是刻意的：那条按站点清（清不掉清单
+/// 外的站点），这条一次清到底，代价是 dsh 自己的登录 cookie 也会没 —— 前端
+/// 清完之后用设备凭据换新 ticket 重新登录，所以用户不用重新扫码配对。
+///
+/// 返回 Kotlin 的复核结果原文：`{ok, storageCleared, formCleared, remaining,
+/// remainingHosts}`。`ok` 只在复查确实没有残留 cookie 时才为 true。
+#[cfg(target_os = "android")]
+#[tauri::command]
+fn android_wipe_web_data() -> Result<Value, String> {
+    let raw = call_wipe_bridge("wipeAll", "()Ljava/lang/String;")?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("清理结果解析失败: {e}"))?;
+    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+        return Err(err.to_string());
+    }
+    Ok(parsed)
+}
+
 // --- Android JNI 桥 ---------------------------------------------------------
 
 /// MainActivity.onCreate 里通过 `external fun nativeInitBridge(activity)` 调用，
@@ -649,6 +747,9 @@ mod android_bridge {
     /// 要的是点号二进制名（com.a.B），传 JNI 斜杠名（com/a/B）会抛
     /// ClassNotFoundException —— 1.0.24 就是这么在真机上挂的。
     pub static COOKIE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+    /// WebDataWipeNative（全量清理）的 Class 全局引用。规则与 COOKIE_CLASS 相同：
+    /// 必须在 nativeInitBridge 里 find_class 缓存，attached 线程找不到应用类。
+    pub static WIPE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
     /// 包名 com.namelessric.dsh_mobile 的 JNI 段为 com/namelessric/dsh_1mobile
     /// （下划线转义成 _1），对应 Kotlin MainActivity companion 里的
@@ -674,6 +775,12 @@ mod android_bridge {
         if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/CookieBridgeNative") {
             if let Ok(g) = env.new_global_ref(&cls) {
                 let _ = COOKIE_CLASS.set(g);
+            }
+        }
+        // 全量清理（WebDataWipe）同理：它是另一个类，不能复用上面的引用。
+        if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/WebDataWipeNative") {
+            if let Ok(g) = env.new_global_ref(&cls) {
+                let _ = WIPE_CLASS.set(g);
             }
         }
     }

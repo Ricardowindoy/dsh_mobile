@@ -36,7 +36,8 @@ trap 'rm -rf "$OUT"' EXIT
 export JAVA_HOME="${JAVA_HOME:-/opt/jdk17}"
 # shellcheck disable=SC2086
 "$KOTLINC" -nowarn -classpath "$ANDROID_JAR" -d "$OUT" \
-  "$KTDIR/CookieBridge.kt" "$KTDIR/CookieBridgeNative.kt" >"$OUT/build.log" 2>&1
+  "$KTDIR/CookieBridge.kt" "$KTDIR/CookieBridgeNative.kt" \
+  "$KTDIR/WebDataWipe.kt" "$KTDIR/WebDataWipeNative.kt" >"$OUT/build.log" 2>&1
 rc=$?
 if [ $rc -ne 0 ] || ! ls "$OUT"/com >/dev/null 2>&1; then
   echo "❌ Kotlin 编译失败："
@@ -58,7 +59,17 @@ check_static() {
 }
 check_static listSites 'String listSites\(\);'
 check_static clearSite 'String clearSite\(java\.lang\.String, java\.lang\.String\);'
+
+# 全量清理是**另一个类**（WieDataWipeNative），必须单独验 —— Rust 侧 find_class
+# 找的是它，签名也是它。少验一条就等于让 "NoSuchMethodError: wipeAll" 留给真机。
+WIPE_SIG="$("$JAVAP" -p -classpath "$OUT" com.namelessric.dsh_mobile.WebDataWipeNative 2>/dev/null)"
+if ! echo "$WIPE_SIG" | grep -qE "public static final java.lang.String wipeAll\("; then
+  echo "❌ wipeAll 不是 public static String（Rust 的 call_static_method 会失败）"; fail=1
+fi
+if ! echo "$WIPE_SIG" | grep -qE "String wipeAll\(\);"; then
+  echo "❌ wipeAll 的签名与 Rust 侧描述符 ()Ljava/lang/String; 不一致"; fail=1
+fi
 [ $fail -ne 0 ] && exit 1
 
-echo "✅ Kotlin 编译通过，JNI 契约一致（listSites / clearSite 均为 public static String）"
+echo "✅ Kotlin 编译通过，JNI 契约一致（listSites / clearSite / wipeAll 均为 public static String）"
 exit 0

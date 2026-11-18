@@ -148,6 +148,13 @@
           <p class="update-meta">清除该站点的登录 cookie 与本地存储（localStorage / IndexedDB），下次打开需重新登录。若该站点页面还开着，请关掉再打开才看得到效果。dsh 自身的登录态不受影响。</p>
           <div id="cookie-list" class="cookie-list"></div>
           <p id="cookie-panel-note" class="update-note" hidden></p>
+          <!-- 全量清理：清单外的站点上面清不到（Android 只能按已知登录主机探测），
+               所以给一条"一次清到底"的路。它会连 dsh 自己的登录 cookie 一起清掉，
+               但配对信息（config.json 里的设备凭据）不在 WebView 存储里 —— 清完自动
+               换 ticket 重新登录，用户不用重新扫码。危险动作走 confirm。 -->
+          <button id="cookie-wipe-all" class="btn-danger-quiet" type="button">
+            清除全部站点数据（保留配对）
+          </button>
           <div class="update-actions">
             <button id="cookie-close" class="icon-btn" type="button" aria-label="关闭" title="关闭">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>

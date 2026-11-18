@@ -21,6 +21,12 @@ import {
 } from "./update-source.js";
 import { pctOf, progressLabel } from "./update-progress.js";
 import { normalizeCookieSites } from "./cookie-sites.js";
+import {
+  hasReconnectCredential,
+  pickPairingConfig,
+  describeWipeOutcome,
+  wipeConfirmText,
+} from "./wipe-plan.js";
 
 const setupEl = document.getElementById("setup");
 const statusEl = document.getElementById("status");
@@ -52,6 +58,7 @@ const cookieList = document.getElementById("cookie-list");
 const cookiePanelNote = document.getElementById("cookie-panel-note");
 const cookieCloseBtn = document.getElementById("cookie-close");
 const cookieRefreshBtn = document.getElementById("cookie-refresh");
+const cookieWipeAllBtn = document.getElementById("cookie-wipe-all");
 const selfCheckBtn = document.getElementById("self-check");
 const selfCheckStatusEl = document.getElementById("self-check-status");
 
@@ -1394,6 +1401,79 @@ cookieCloseBtn?.addEventListener("click", () => {
 });
 cookieRefreshBtn?.addEventListener("click", () => {
   void loadCookieSites();
+});
+
+// --- 全部清除（保留配对）------------------------------------------------------
+//
+// 为什么需要这条：上面「按站点清」的站点清单在 Android 上是**探测**得来的
+// （CookieManager 没有枚举 API，只能逐个已知登录主机 getCookie），而且只碰
+// cookie 与 web storage。清单外的站点、HTTP 缓存、表单数据、HTTP Basic 认证
+// 缓存都不在其中 —— 用户的真实体验就是「面板显示已清，打开还是登录态」。
+//
+// 这条走系统整店 API，一次清到底。它会把 dsh 自己的登录 cookie 也清掉，但
+// **配对信息不会丢**：relayUrl / deviceToken / deviceId 由 Rust 写在 app 配置
+// 目录的 config.json 里，不在 WebView 存储中（localStorage 只是镜像）。
+// 所以流程是「先把配置读出来 → 整店清 → 把配对信息写回去 → 用设备凭据换一次性
+// ticket 重新登录」。清完用户不需要重新扫码。
+//
+// ⚠️ 顺序不能反：必须**先**读出配置再清。清理会抹掉 localStorage 里的镜像，
+// 虽然 Rust 侧文件还在（invokeLoad 能读回来），但把"还能不能读回来"当成唯一
+// 安全网是赌运气 —— 文件读写失败（权限/磁盘满）时用户就得重新扫码。
+async function wipeAllKeepingPairing(btn) {
+  const current = lastCfg || (await invokeLoad().catch(() => null)) || loadConfig();
+  const pairing = pickPairingConfig(current);
+  if (!window.confirm(wipeConfirmText(pairing))) return;
+
+  const android = /android/i.test(navigator.userAgent || "");
+  btn.disabled = true;
+  btn.textContent = "清除中…";
+  setStatusText(cookieClearStatus, "正在清除全部站点数据…", undefined);
+  try {
+    const res = android
+      ? await tauriInvoke("android_wipe_web_data")
+      : await tauriInvoke("desktop_wipe_web_data");
+
+    // 1) 把配对信息写回（两个持久面：Rust 文件 + localStorage 镜像）。
+    //    只写配对键 —— 更新源偏好、跳过版本号这些"用户偏好"是 App 级设置，
+    //    本来就在 WebView 存储里被清掉了，不该从内存快照里偷偷搬回来。
+    const restored = { ...pairing };
+    await invokeSave(restored);
+    saveConfig(restored);
+    lastCfg = restored;
+
+    // 2) 复核数字落到同一个状态位（诚实：残留要报，不能只看"调用成功"）。
+    const outcome = describeWipeOutcome({ ...res, pairing: restored }, android ? "android" : "desktop");
+    log(`wipe all: ok=${res?.ok} remaining=${res?.remaining} hosts=${(res?.remainingHosts || []).join(",")} ` +
+      `storageCleared=${res?.storageCleared ?? "-"} formCleared=${res?.formCleared ?? "-"} ` +
+      `keptPairing=${hasReconnectCredential(restored)}`);
+    setStatusText(cookieClearStatus, outcome.text, outcome.tone);
+
+    // 3) 重新登录：清掉 cookie 后当前页面已无 dsh 登录态。整页导航回 relay
+    //    登录入口（connect 会用设备凭据换 ticket），而不是 reload 当前 URL
+    //    —— 当前 URL 是 GUI 页面，直接 reload 只会拿到 401 白屏。
+    if (!hasReconnectCredential(restored)) {
+      // 没有凭据就没法免扫码重连：如实停在设置页让用户扫码/填 token，
+      // 而不是带着一个注定 401 的地址撞上去。
+      setupEl.hidden = false;
+      setStatusText(cookieClearStatus, "已清空站点数据，但没有可用的配对凭据 —— 请扫码或填写 token 重新连接", "bad");
+      return;
+    }
+    setStatusText(cookieClearStatus, `${outcome.text}；正在重新登录 dsh…`, outcome.tone === "ok" ? "ok" : "bad");
+    await new Promise((r) => setTimeout(r, 600));
+    setupEl.hidden = false;
+    statusEl.hidden = false;
+    await connect(restored, true);
+  } catch (e) {
+    setStatusText(cookieClearStatus, `清除失败：${errMsg(e)}`, "bad");
+    log(`wipe all failed: ${errMsg(e)}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "清除全部站点数据（保留配对）";
+  }
+}
+
+cookieWipeAllBtn?.addEventListener("click", () => {
+  void wipeAllKeepingPairing(cookieWipeAllBtn);
 });
 
 // Boot: 已配置则先检查更新——有新版本时停在设置页展示更新横幅

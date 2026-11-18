@@ -107,6 +107,9 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     webViewRef = webView
+    // 全量清理桥（WebDataWipe）只依赖 WebView 实例本身，不反向依赖本类 ——
+    // 这样那个文件能被本地 kotlinc 单独编译（见 scripts/verify/kotlin-cookie-bridge.sh）。
+    WebDataWipe.attach(webView)
     // App 升级后清一次 WebView 的 HTTP 磁盘缓存：GUI 的 boot 页与客户端插件
     // 都走 WebView 缓存，JS 侧 clearServiceWorkers 清不掉它（本项目已踩过）。
     // 不清的话，新加的客户端插件（例如通知深链）会一直不生效。

@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.WebStorage
+import android.webkit.WebViewDatabase
 import android.webkit.ValueCallback
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -103,6 +104,16 @@ object CookieBridge {
             }
         }
     }
+
+    /**
+     * 已知登录主机里**仍然有（可清）cookie** 的那些。
+     *
+     * 给全量清理 [WebDataWipe] 做完之后的复核用：`removeAllCookies` 是异步的，
+     * 「我调用了它」不等于「store 里真的没了」—— 1.0.26 的教训就是把调用次数
+     * 当成结果报了 121 枚。复核只认重新探测的结果。
+     */
+    internal fun hostsWithCookies(manager: CookieManager): List<String> =
+        LOGIN_HOSTS.filter { probeNames(manager, it).isNotEmpty() }
 
     /**
      * 清掉 [site] 的 cookie，**并在写完之后重新探测复核**。

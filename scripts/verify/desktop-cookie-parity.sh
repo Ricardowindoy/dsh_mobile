@@ -53,8 +53,9 @@ except ValueError:
 body = src[start:end].replace('#[cfg(not(target_os = "android"))]\n', '').replace('#[tauri::command]\n', '')
 
 # mock 逐条对照 tauri-2.12.5/src/webview/webview_window.rs:
-#   cookies()                -> Result<Vec<Cookie<'static>>>
-#   delete_cookie(Cookie<'_>)-> Result<()>          ← 按值，不是 &Cookie
+#   cookies()                     -> Result<Vec<Cookie<'static>>>
+#   delete_cookie(Cookie<'_>)     -> Result<()>          ← 按值，不是 &Cookie
+#   clear_all_browsing_data()     -> Result<()>          ← 委托 wry，各平台各异
 #   AppHandle::get_webview_window(&str) -> Option<WebviewWindow>
 mock = '''use cookie::Cookie;
 use serde_json::{json, Value};
@@ -65,6 +66,7 @@ pub mod tauri {
     impl WebviewWindow {
         pub fn cookies(&self) -> Result<Vec<Cookie<'static>>, String> { unimplemented!() }
         pub fn delete_cookie(&self, _c: Cookie<'_>) -> Result<(), String> { unimplemented!() }
+        pub fn clear_all_browsing_data(&self) -> Result<(), String> { unimplemented!() }
     }
     pub struct AppHandle;
     impl AppHandle {

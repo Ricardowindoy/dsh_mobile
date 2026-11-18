@@ -53,3 +53,9 @@
 # 类里所有成员都要保：错误信息只显示类还在、方法没了，最难查。
 -keep class com.namelessric.dsh_mobile.CookieBridge { *; }
 -keep class com.namelessric.dsh_mobile.CookieBridgeNative { *; }
+# 全量清理桥（1.0.30）：wipeAll 同样只由 Rust 经 JNI 按名字调用，R8 看不见
+# 任何 Java 侧引用；漏 keep 就是第二个 "NoSuchMethodError: no static method
+# wipeAll()Ljava/lang/String;"。它调 CookieBridge.hostsWithCookies 复核，
+# 所以 CookieBridge 的 keep 仍然必须（两者一起保）。
+-keep class com.namelessric.dsh_mobile.WebDataWipe { *; }
+-keep class com.namelessric.dsh_mobile.WebDataWipeNative { *; }
