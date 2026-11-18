@@ -3,6 +3,7 @@ package com.namelessric.dsh_mobile
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
+import android.webkit.WebStorage
 import android.webkit.ValueCallback
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -215,7 +216,9 @@ object CookieBridge {
             try {
                 val late = targets.intersect(hosts.flatMap { probeNames(manager, it) }.toSet())
                 if (late.isEmpty()) {
-                    finish(manager, hosts, targets, attempts, callback, rewrote = false)
+                    clearWebStorageThen(hosts) { bytes ->
+                        finish(manager, hosts, targets, attempts, callback, rewrote = false, storageAfter = bytes)
+                    }
                     return@postDelayed
                 }
                 // 还在：补一轮（可能是被页面写回的，也可能第一次没匹配上）。
@@ -231,13 +234,56 @@ object CookieBridge {
                 submit(retry) {
                     try { manager.flush() } catch (_: Throwable) { /* 不致命 */ }
                     handler.postDelayed({
-                        finish(manager, hosts, targets, attempts, callback, rewrote = true)
+                        clearWebStorageThen(hosts) { bytes ->
+                            finish(manager, hosts, targets, attempts, callback, rewrote = true, storageAfter = bytes)
+                        }
                     }, SETTLE_MS)
                 }
             } catch (t: Throwable) {
                 callback.onReceiveValue(errorJson("clearSite.lateCheck", t))
             }
         }, LATE_RECHECK_MS)
+    }
+
+    /**
+     * 清掉这些源的 **web storage**（localStorage / IndexedDB），并回报残留字节数。
+     *
+     * 为什么必须有这一步：现代站点（Trae / WorkBuddy / qoder 这类 SPA）把登录
+     * token 放在 localStorage 或 IndexedDB 里，cookie 一枚不剩也照样是登录态 ——
+     * 1.0.28 真机就是这样：面板显示"已清除"，打开网站仍是旧账号。
+     *
+     * WebStorage 没有"按源清"之外更好的接口，但 deleteOrigin 正好是按源清。
+     * origin 形态是 scheme://host（不带路径与尾斜杠）。
+     *
+     * 复核用 getUsageForOrigin：回调给出该源残留字节数，非 0 就是没清干净。
+     * 该回调在某些版本可能不回调，所以另挂 800ms 兜底，不能卡在等待里
+     * （Rust 侧最多等 15s，超时会被报成"清除超时"，比"没清掉"更难懂）。
+     */
+    private fun clearWebStorageThen(hosts: List<String>, onDone: (Long) -> Unit) {
+        val storage = WebStorage.getInstance()
+        for (h in hosts) {
+            for (scheme in arrayOf("https", "http")) {
+                try {
+                    storage.deleteOrigin("$scheme://$h")
+                } catch (_: Throwable) {
+                    // 单个源失败不影响其它源，也不该让整条命令失败。
+                }
+            }
+        }
+        val handler = Handler(Looper.getMainLooper())
+        var reported = false
+        fun report(bytes: Long) {
+            if (reported) return
+            reported = true
+            onDone(bytes)
+        }
+        // 兜底：800ms 后无论回调有没有来都收尾（读不到就报 -1，不谎称已清）。
+        handler.postDelayed({ report(-1L) }, 800)
+        try {
+            storage.getUsageForOrigin("https://${hosts.first()}") { bytes -> report(bytes ?: 0L) }
+        } catch (_: Throwable) {
+            report(-1L)
+        }
     }
 
     /** 复核：重扫，算出真正消失的与仍然存在的，如实上报。 */
@@ -248,6 +294,7 @@ object CookieBridge {
         attempts: Int,
         callback: ValueCallback<String>,
         rewrote: Boolean = false,
+        storageAfter: Long = -1L,
     ) {
         try {
             val after = hosts.flatMap { probeNames(manager, it) }.toSet()
@@ -257,7 +304,7 @@ object CookieBridge {
             callback.onReceiveValue(
                 "{\"attempts\":$attempts,\"targeted\":${targets.size}," +
                     "\"cleared\":$cleared,\"remaining\":${remaining.size}," +
-                    "\"remainingNames\":[$names],\"rewrote\":$rewrote}",
+                    "\"remainingNames\":[$names],\"rewrote\":$rewrote,\"storageAfter\":$storageAfter}",
             )
         } catch (t: Throwable) {
             callback.onReceiveValue(errorJson("clearSite.verify", t))

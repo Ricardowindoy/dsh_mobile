@@ -322,6 +322,24 @@ test('D9 上报的「已清除」必须来自复核，不能是尝试次数', ()
   assert.ok(/"remaining"/.test(desk), '桌面端结果里没有 remaining')
 })
 
+test('D10 清 cookie 必须同时清该源的 web storage', () => {
+  // 1.0.28 真机：面板显示"已清除"，打开网站还是旧账号。现代站点（Trae /
+  // WorkBuddy / qoder 这类 SPA）把 token 放在 localStorage / IndexedDB 里，
+  // 只清 cookie 等于没退出登录。Android 的 WebStorage.deleteOrigin 是按源清。
+  const kt = stripKotlinComments(
+    readFileSync(join(MOBILE, KT_DIR, 'CookieBridge.kt'), 'utf8'),
+  ).code
+  assert.ok(/import android\.webkit\.WebStorage/.test(kt), '没有引入 WebStorage')
+  assert.ok(/deleteOrigin\(/.test(kt), '没有按源清 web storage（只清 cookie 不算退出登录）')
+  assert.ok(/getUsageForOrigin\(/.test(kt), '清完没有复核该源残留字节数')
+  // 必须是**上报的 JSON 字段**，不是随便一个同名变量
+  assert.ok(kt.includes('\\"storageAfter\\"'), '上报的 JSON 里没有 storageAfter 字段，前端无法如实说明存储是否清干净')
+
+  // 顺带钉住：只允许按源清，不许出现"清全部 web storage"——那会把 dsh 自己的
+  // 本地配置一起抹掉，用户会莫名其妙丢设置。
+  assert.ok(!/deleteAllData\(\)/.test(kt), '出现了 WebStorage.deleteAllData()（会清掉所有源的存储，含 dsh 自己）')
+})
+
 test('D2 Rust 注册了四条 cookie 命令', () => {
   const rs = read('src-tauri/src/lib.rs')
   for (const cmd of ['android_cookie_sites', 'android_clear_site_cookies',

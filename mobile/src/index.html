@@ -145,7 +145,7 @@
              过滤已不可能命中 dsh 域，但把"这条不能清"画出来是诚实，不是装饰。 -->
         <section id="cookie-panel" class="card update-card" hidden>
           <p class="update-title">登录站点清理</p>
-          <p class="update-meta">列出 App 里保存了登录 cookie 的外部站点；清除后下次打开该站点需重新登录。dsh 自身的登录态不受影响。</p>
+          <p class="update-meta">清除该站点的登录 cookie 与本地存储（localStorage / IndexedDB），下次打开需重新登录。若该站点页面还开着，请关掉再打开才看得到效果。dsh 自身的登录态不受影响。</p>
           <div id="cookie-list" class="cookie-list"></div>
           <p id="cookie-panel-note" class="update-note" hidden></p>
           <div class="update-actions">

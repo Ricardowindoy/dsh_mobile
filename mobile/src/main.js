@@ -1352,10 +1352,16 @@ async function clearOneSite(site, btn) {
     const leftNames = Array.isArray(res?.remainingNames) ? res.remainingNames : [];
     // 剩余 cookie 的**名字**一定要进日志：不写出来，线上就只能看到"还剩 1 枚"，
     // 无从判断是哪个（qoder.cn 卡住那次就是这样，白等了一轮）。
+    // storageAfter：Android 侧清完 web storage 后实测的残留字节数（-1 = 读不到）。
+    // cookie 清干净但 localStorage 里还留着 token 的站点，打开仍是登录态 ——
+    // 所以这个数字要报出来，别让"cookie 已清"被理解成"已退出登录"。
+    const storageAfter = Number(res?.storageAfter ?? -1);
     log(`cookie clear ${site}: cleared=${cleared} remaining=${remaining} attempts=${res?.attempts ?? "-"}` +
-      (leftNames.length ? ` left=[${leftNames.join(",")}] rewrote=${res?.rewrote ?? false}` : ""));
+      (leftNames.length ? ` left=[${leftNames.join(",")}]` : "") +
+      ` rewrote=${res?.rewrote ?? false} storageAfter=${storageAfter}`);
     if (remaining === 0 && cleared > 0) {
-      setStatusText(cookieClearStatus, `${site} 已清除 ${cleared} 枚 cookie`, "ok");
+      const storageNote = storageAfter > 0 ? `；本地存储仍有 ${storageAfter} 字节未清` : "";
+      setStatusText(cookieClearStatus, `${site} 已清除 ${cleared} 枚 cookie${storageNote}`, storageAfter > 0 ? "bad" : "ok");
     } else if (remaining > 0 && cleared > 0) {
       setStatusText(cookieClearStatus, `${site} 清掉 ${cleared} 枚，仍有 ${remaining} 枚（${leftNames.join("、")}）`, "bad");
     } else if (remaining > 0) {
