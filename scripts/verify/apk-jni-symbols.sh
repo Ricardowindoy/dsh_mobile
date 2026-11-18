@@ -32,7 +32,23 @@ CLASSES=$(grep -oE 'find_class\(\s*"com/namelessric/dsh_mobile/[A-Za-z0-9_$]+"' 
 
 # Rust 对这些类调用的静态方法名（call_static_method 的实参）。
 # 名单短且稳定，直接列；新增 JNI 入口时同步加这里。
-METHODS="listSites clearSite"
+# ⚠️ 漏加一个方法名 = 那个方法在 R8 下被删了也没人发现（1.0.25 的
+#    NoSuchMethodError 就是这么上线的）。所以另有一条兜底：lib.rs 里每个
+#    call_*_bridge("<方法>", ...) 的字面量都必须出现在下面这份名单里，
+#    不在就 SKIP_AS_ERROR（闸门不认识 = 闸门失效，不是"通过"）。
+METHODS="listSites clearSite wipeAll"
+
+# 从 lib.rs 抽 JNI 入口调用，用来校验上面的名单没漏项。
+# 只认**命令层**的调用形态 `call_<x>_bridge("方法名", "签名"...)`：共用入口
+# `call_bridge("类名", ...)` 的第一个参数是类名不是方法名，一起抓会误报。
+CALLED=$(grep -oE 'call_[a-z]+_bridge\("[A-Za-z0-9_]+",[[:space:]]*"' "$LIB" \
+  | sed -E 's/.*\("//; s/",.*$//' | sort -u)
+for m in $CALLED; do
+  case " $METHODS " in
+    *" $m "*) ;;
+    *) echo "❌ lib.rs 调用了 JNI 方法 $m，但 apk-jni-symbols.sh 的 METHODS 名单里没有它（闸门会漏检 R8 删除）"; exit 1 ;;
+  esac
+done
 
 DEX=$(mktemp)
 trap 'rm -f "$DEX"' EXIT
