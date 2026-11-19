@@ -51,7 +51,7 @@ pub extern "system" fn Java_com_namelessric_dsh_1mobile_MainActivity_nativeSetPe
 
 use serde_json::{json, Value};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,7 +78,8 @@ pub fn run() {
         take_pending_session,
         desktop_cookie_sites,
         desktop_clear_site_cookies,
-        desktop_wipe_web_data
+        desktop_wipe_web_data,
+        update_background_start
     ]);
     #[cfg(target_os = "android")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -97,7 +98,8 @@ pub fn run() {
         take_pending_session,
         android_cookie_sites,
         android_clear_site_cookies,
-        android_wipe_web_data
+        android_wipe_web_data,
+        update_background_start
     ]);
     builder
         // loopback 插件暂不注册（白屏根因，见 loopback_oauth.rs 顶部说明）。
@@ -215,8 +217,9 @@ fn safe_update_filename(raw: Option<&str>) -> String {
 /// 的 CommandArg impl——Channel 只实现 Serialize），每个写入块都推
 /// {received,total}；首尾事件保证「开始」与「100%」总会出现，不依赖分块边界。
 ///
-/// filename 必须是发布资产原名（如 dsh-mobile_1.0.22_x64-setup.exe）：
-/// 桌面端靠扩展名选择打开方式；旧版固定写 update.apk 会让 Windows 无法执行。
+/// filename：发布资产原名（JS 从三个源里真实携带）。桌面端靠扩展名选打开
+/// 方式；relay 的下载 URL 末段是 download?platform=…，从 URL 推导不出文件名，
+/// 所以前端必须传——URL 推导只是没传时的兜底（旧版前端）。
 #[tauri::command]
 async fn download_update(
     app: tauri::AppHandle,
@@ -225,6 +228,34 @@ async fn download_update(
     expected_sha256: Option<String>,
     filename: Option<String>,
 ) -> Result<Value, String> {
+    let (final_path, size, digest) = download_to_cache(
+        &app,
+        &url,
+        expected_sha256.as_deref(),
+        filename.as_deref().filter(|s| !s.trim().is_empty()),
+        |received, total| {
+            // send 失败只意味着 WebView 已关闭/跳走：下载继续，不因进度上报失败而中断
+            let _ = on_progress.send(DownloadProgress { received, total });
+        },
+    )
+    .await?;
+    Ok(json!({
+        "path": final_path.to_string_lossy(),
+        "size": size,
+        "sha256": digest,
+    }))
+}
+
+/// 共用的「流式下载到缓存目录 + 边下边算 SHA-256」实现。
+/// download_update（用户点按钮的前台路径）与后台自动下载都走这里；
+/// 差异只在进度回调（后台没有 WebView 在听，传空闭包）。
+async fn download_to_cache(
+    app: &tauri::AppHandle,
+    url: &str,
+    expected_sha256: Option<&str>,
+    filename_hint: Option<&str>,
+    mut on_chunk: impl FnMut(u64, Option<u64>),
+) -> Result<(std::path::PathBuf, u64, String), String> {
     use sha2::Digest;
     use tokio::io::AsyncWriteExt;
 
@@ -237,7 +268,7 @@ async fn download_update(
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
     let mut resp = client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .map_err(|e| format!("连接更新服务器失败: {e}"))?;
@@ -246,9 +277,7 @@ async fn download_update(
     }
     // Content-Length 有无决定前端进度是「定态百分比」还是「不定态」；
     // 有值也只作展示上界，真实进度以收到的字节为准（收到超量前端自行钳 100）。
-    let total = resp
-        .content_length()
-        .filter(|&t| t > 0);
+    let total = resp.content_length().filter(|&t| t > 0);
 
     let dir = app
         .path()
@@ -258,7 +287,13 @@ async fn download_update(
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("create update dir: {e}"))?;
-    let file_name = safe_update_filename(filename.as_deref());
+    // 落盘名：资产原名优先（前台必传；后台从 BgUpdate.filename 传入），
+    // 没有才从 URL 末段推导——relay 的 URL 末段是 download?platform=…，
+    // 推导结果无扩展名，safe_update_filename 会把它收敛成 update.bin。
+    let file_name = safe_update_filename(match filename_hint {
+        Some(hint) => Some(hint),
+        None => url.rsplit('/').next(),
+    });
     let tmp_path = dir.join(format!("{file_name}.part"));
     let final_path = dir.join(&file_name);
 
@@ -267,8 +302,7 @@ async fn download_update(
         .await
         .map_err(|e| format!("create temp file: {e}"))?;
     let mut size: u64 = 0;
-    // 首个进度事件：0 字节也立即出现（不定态时这是唯一能看到"活着"的事件）
-    let _ = on_progress.send(DownloadProgress { received: 0, total });
+    on_chunk(0, total);
     while let Some(chunk) = resp
         .chunk()
         .await
@@ -279,17 +313,13 @@ async fn download_update(
             .await
             .map_err(|e| format!("写入临时文件失败: {e}"))?;
         size += chunk.len() as u64;
-        // send 失败只意味着 WebView 已关闭/跳走：下载继续，不因进度上报失败而中断
-        let _ = on_progress.send(DownloadProgress {
-            received: size,
-            total,
-        });
+        on_chunk(size, total);
     }
     file.flush().await.ok();
     drop(file);
 
     let digest: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if let Some(expected) = expected_sha256.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(expected) = expected_sha256.map(str::trim).filter(|s| !s.is_empty()) {
         if !digest.eq_ignore_ascii_case(expected) {
             let _ = tokio::fs::remove_file(&tmp_path).await;
             return Err("更新包完整性校验失败（SHA-256 不匹配），已放弃安装".into());
@@ -300,12 +330,666 @@ async fn download_update(
     tokio::fs::rename(&tmp_path, &final_path)
         .await
         .map_err(|e| format!("finalize update file: {e}"))?;
+    Ok((final_path, size, digest))
+}
 
-    Ok(json!({
-        "path": final_path.to_string_lossy(),
-        "size": size,
-        "sha256": digest,
+/// 更新检查结果在三个源之间共用的一小包元数据。
+struct BgUpdate {
+    version: String,
+    url: String,
+    sha256: String,
+    filename: String,
+}
+
+/// 用用户偏好的源做一次更新检查（对应 JS 侧 checkUpdate 的三个源）。
+/// 源不可用就报错返回——不做隐式回退（与 JS 侧同一约定：回退会让用户以为
+/// 当前源能用）。
+async fn bg_check_update(source: &str) -> Result<Option<BgUpdate>, String> {
+    let version = app_version_string()?;
+    let target = bg_platform_arch();
+    match source {
+        "gitee" => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(8))
+                .timeout(Duration::from_secs(12))
+                .build()
+                .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+            let resp = client
+                .get("https://gitee.com/api/v5/repos/namelessRic/dsh_mobile/releases?page=1&per_page=100")
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .map_err(|e| format!("Gitee 不可达: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Gitee HTTP {}", resp.status()));
+            }
+            let releases: Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Gitee 响应解析失败: {e}"))?;
+            let list = releases.as_array().cloned().unwrap_or_default();
+            // Gitee releases 列表按创建时间升序返回，必须按版本挑最大
+            // （JS 侧 pickLatestGiteeRelease 同一约定，取 arr[0] 会拿到最旧）。
+            let mut best: Option<(&Value, String)> = None;
+            for r in &list {
+                let tag = bg_tag_of(r);
+                let v = bg_normalize_version(&tag);
+                if v.is_empty() {
+                    continue;
+                }
+                if r.get("prerelease").and_then(Value::as_bool) == Some(true) {
+                    continue;
+                }
+                if best.as_ref().map_or(true, |(_, bv)| bg_version_gt(&v, bv)) {
+                    best = Some((r, v));
+                }
+            }
+            let (release, ver) = match best {
+                Some(x) => x,
+                None => return Ok(None), // 该源暂无 release → 无更新
+            };
+            if bg_version_le(&ver, &version) {
+                return Ok(None);
+            }
+            bg_pick_asset(release, &ver, "gitee", target).await
+        }
+        "relay" => {
+            // relay 地址从持久化配置读：后台任务拿不到 WebView，config.json 是唯一入口。
+            let relay = bg_relay_base(app_config_json().relay_url)?;
+            let client = bg_relay_client(&relay)?;
+            let url = format!(
+                "{relay}/__dsh_tunnel__/update/check?platform={}&arch={}&appVersion={}",
+                target.0,
+                target.1,
+                urlencode_version(&version),
+            );
+            let resp = client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| format!("Relay 不可达: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("检查更新失败（HTTP {}）", resp.status()));
+            }
+            let body: Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("Relay 响应解析失败: {e}"))?;
+            let code = body.get("code").and_then(Value::as_i64).unwrap_or(0);
+            if code == 204 || code != 200 {
+                return Ok(None);
+            }
+            let version_new = body
+                .get("version")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let url = body.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+            if version_new.is_empty() || url.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some(BgUpdate {
+                sha256: body.get("sha256").and_then(Value::as_str).unwrap_or("").to_string(),
+                filename: body.get("filename").and_then(Value::as_str).unwrap_or("").to_string(),
+                version: version_new,
+                url,
+            }))
+        }
+        // 缺省/未知源一律按 GitHub（与 JS 侧 normalizeSource 的回落一致）。
+        _ => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(6))
+                .timeout(Duration::from_secs(12))
+                .user_agent("dsh-mobile-updater")
+                .build()
+                .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+            let resp = client
+                .get("https://api.github.com/repos/Ricardowindoy/dsh_mobile/releases/latest")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .await
+                .map_err(|e| format!("GitHub 不可达: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("GitHub HTTP {}", resp.status()));
+            }
+            let release: Value = resp
+                .json()
+                .await
+                .map_err(|e| format!("GitHub 响应解析失败: {e}"))?;
+            if release.get("draft").and_then(Value::as_bool) == Some(true)
+                || release.get("prerelease").and_then(Value::as_bool) == Some(true)
+            {
+                return Ok(None);
+            }
+            let tag = bg_tag_of(&release);
+            let ver = bg_normalize_version(&tag);
+            if ver.is_empty() {
+                return Err("GitHub release tag 异常".into());
+            }
+            if bg_version_le(&ver, &version) {
+                return Ok(None);
+            }
+            bg_pick_asset(&release, &ver, "github", target).await
+        }
+    }
+}
+
+/// 从 GitHub/Gitee release JSON 里挑当前平台的安装包资产，映射成 BgUpdate。
+async fn bg_pick_asset(
+    release: &Value,
+    version: &str,
+    source: &str,
+    target: (&str, &str),
+) -> Result<Option<BgUpdate>, String> {
+    let assets = release
+        .get("assets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let (platform, arch) = target;
+    // 与 JS 侧 PLATFORM_ASSET_RULES.android 同一优先级（后台自动更新只在
+    // Android 上跑；桌面继续走前端 presentUpdate 流程）。
+    let rules: [fn(&str) -> bool; 3] = [
+        |n: &str| n.eq_ignore_ascii_case("app-arm64-release.apk"),
+        |n: &str| {
+            let lower = n.to_ascii_lowercase();
+            lower.contains("arm64") && lower.ends_with(".apk")
+        },
+        |n: &str| n.to_ascii_lowercase().ends_with(".apk"),
+    ];
+    let mut asset: Option<&Value> = None;
+    for rule in rules {
+        if let Some(found) = assets.iter().find(|a| {
+            a.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| rule(n))
+        }) {
+            asset = Some(found);
+            break;
+        }
+    }
+    let asset = match asset {
+        Some(a) => a,
+        None => return Err(format!("{source} release 没有 {platform}/{arch} 安装包")),
+    };
+    let name = asset.get("name").and_then(Value::as_str).unwrap_or("");
+    let url = asset
+        .get("browser_download_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if url.is_empty() {
+        return Err(format!("{source} release 资产缺少下载地址"));
+    }
+    // 校验文件只认 `<资产名>.sha256`：release 里同时有多平台的 .sha256，
+    // 随便拿一个会让下载后的校验稳定失败（JS 侧同一约定）。
+    let sha256 = bg_fetch_checksum_text(&url).await.unwrap_or_default();
+    Ok(Some(BgUpdate {
+        version: version.to_string(),
+        url,
+        sha256,
+        filename: name.to_string(),
     }))
+}
+
+/// 下载 `<资产名>.sha256` 校验文件并取第一段 64 位 hex；拿不到就留空
+/// （与 JS fillChecksum 同语义：仍可下载，只是没校验）。失败不报错。
+async fn bg_fetch_checksum_text(asset_url: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{asset_url}.sha256"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("checksum HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    for token in text.split_whitespace() {
+        let t = token.trim_matches(|c: char| !c.is_ascii_hexdigit());
+        if t.len() == 64 && t.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(t.to_ascii_lowercase());
+        }
+    }
+    Err("checksum 文件里没有 64 位 hex".into())
+}
+
+/// 后台任务里的版本比较：a > b。缺段按 0。
+fn bg_version_gt(a: &str, b: &str) -> bool {
+    bg_version_cmp(a, b) == std::cmp::Ordering::Greater
+}
+
+/// 后台任务里的版本比较：a <= b。
+fn bg_version_le(a: &str, b: &str) -> bool {
+    bg_version_cmp(a, b) != std::cmp::Ordering::Greater
+}
+
+fn bg_version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u64> {
+        bg_normalize_version(s)
+            .split('.')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let (pa, pb) = (parse(a), parse(b));
+    let n = pa.len().max(pb.len());
+    for i in 0..n {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+/// 剥 v 前缀、留点分数字段（与 JS normalizeVersion 同规则，后台任务用）。
+fn bg_normalize_version(raw: &str) -> String {
+    let trimmed = raw.trim().trim_start_matches(['v', 'V']);
+    let mut out = String::new();
+    for c in trimmed.chars() {
+        if c.is_ascii_digit() || c == '.' {
+            out.push(c);
+        } else {
+            break;
+        }
+    }
+    out.trim_matches('.').to_string()
+}
+
+fn bg_tag_of(release: &Value) -> String {
+    release
+        .get("tag_name")
+        .or_else(|| release.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// 后台任务的目标平台：Android arm64（整条链路只在 Android 编译启用）。
+fn bg_platform_arch() -> (&'static str, &'static str) {
+    ("android", "arm64")
+}
+
+/// 配置文件的窄读面：后台任务只关心 relayUrl 与 updateSource。
+struct BgConfig {
+    relay_url: String,
+    update_source: String,
+}
+
+/// 读 app_config_dir/config.json（save_config 的落点）。缺文件/解析失败返回
+/// 空配置——后台更新是增益路径，配置读不到就不该把它变成错误弹给用户。
+fn app_config_json() -> BgConfig {
+    read_bg_config().unwrap_or(BgConfig {
+        relay_url: String::new(),
+        update_source: String::new(),
+    })
+}
+
+#[cfg(target_os = "android")]
+fn read_bg_config() -> Result<BgConfig, String> {
+    use jni::objects::JObject;
+
+    let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
+    let act = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach jvm: {e}"))?;
+    let activity: &JObject = act.as_obj();
+
+    // Activity.getFilesDir() → File(dir, "config.json") 读原文。后台任务里
+    // 拿不到前端通道，而 Android 上 app_config_dir 的真实落点就是
+    // files/config.json（save_config 经 tauri::path() 写的那份）。
+    let files_dir = env
+        .call_method(activity, "getFilesDir", "()Ljava/io/File;", &[])
+        .map_err(|e| format!("getFilesDir: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let name = env.new_string("config.json").map_err(|e| e.to_string())?;
+    let fobj = env
+        .new_object(
+            "java/io/File",
+            "(Ljava/io/File;Ljava/lang/String;)V",
+            &[(&files_dir).into(), (&name).into()],
+        )
+        .map_err(|e| format!("new File: {e}"))?;
+    let exists = env
+        .call_method(&fobj, "exists", "()Z", &[])
+        .map_err(|e| format!("exists: {e}"))?
+        .z()
+        .map_err(|e| e.to_string())?;
+    if !exists {
+        return Err("config.json 不存在".into());
+    }
+    let ret = env
+        .call_method(&fobj, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .map_err(|e| format!("getAbsolutePath: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let abs: String = env
+        .get_string((&ret).into())
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
+    let data = std::fs::read(&abs).map_err(|e| format!("read {abs}: {e}"))?;
+    parse_bg_config(&data)
+}
+
+#[cfg(not(target_os = "android"))]
+fn read_bg_config() -> Result<BgConfig, String> {
+    Err("后台自动更新仅在 Android 上运行".into())
+}
+
+fn parse_bg_config(data: &[u8]) -> Result<BgConfig, String> {
+    let v: Value = serde_json::from_slice(data).map_err(|e| format!("decode config: {e}"))?;
+    Ok(BgConfig {
+        relay_url: v.get("relayUrl").and_then(Value::as_str).unwrap_or("").to_string(),
+        update_source: v.get("updateSource").and_then(Value::as_str).unwrap_or("").to_string(),
+    })
+}
+
+fn bg_relay_base(relay_url: String) -> Result<String, String> {
+    let base = relay_url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return Err("未配置 Relay 地址".into());
+    }
+    Ok(base)
+}
+
+/// relay 客户端：IP 入口显式注入内置私有 CA（reqwest/rustls 不读 Android 信任库）。
+fn bg_relay_client(base: &str) -> Result<reqwest::Client, String> {
+    let host = reqwest::Url::parse(base)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default();
+    let is_ip = host.parse::<std::net::IpAddr>().is_ok();
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(12));
+    if is_ip {
+        let root = reqwest::Certificate::from_pem(RELAY_CA_PEM)
+            .map_err(|e| format!("内置 relay CA 解析失败: {e}"))?;
+        builder = builder.add_root_certificate(root);
+    }
+    builder
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))
+}
+
+/// 版本串的 query 编码（appVersion 是纯版本号，只会出现点号）。
+fn urlencode_version(v: &str) -> String {
+    v.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u32),
+        })
+        .collect()
+}
+
+/// 当前 App 版本：经 JNI 读 PackageInfo.versionName（后台任务拿不到 JS 侧
+/// getVersion 通道）。读不到按空串处理——空串永远小于远端版本。
+#[cfg(target_os = "android")]
+fn app_version_string() -> Result<String, String> {
+    let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
+    let act = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("attach jvm: {e}"))?;
+    let activity = act.as_obj();
+    let pm = env
+        .call_method(
+            activity,
+            "getPackageManager",
+            "()Landroid/content/pm/PackageManager;",
+            &[],
+        )
+        .map_err(|e| format!("getPackageManager: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let pkg = env
+        .call_method(activity, "getPackageName", "()Ljava/lang/String;", &[])
+        .map_err(|e| format!("getPackageName: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let info = env
+        .call_method(
+            &pm,
+            "getPackageInfo",
+            "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+            &[(&pkg).into(), jni::objects::JValue::Int(0)],
+        )
+        .map_err(|e| format!("getPackageInfo: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    let vn = env
+        .get_field(&info, "versionName", "Ljava/lang/String;")
+        .map_err(|e| format!("versionName: {e}"))?
+        .l()
+        .map_err(|e| e.to_string())?;
+    if vn.is_null() {
+        return Ok(String::new());
+    }
+    let s: String = env
+        .get_string((&vn).into())
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
+    Ok(s.trim().to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+fn app_version_string() -> Result<String, String> {
+    Err("后台自动更新仅在 Android 上运行".into())
+}
+
+/// 启动后台自动更新任务（fire-and-forget）。进程内幂等：已跑过就不再起。
+/// 失败全部走 eprintln + Kotlin dsh-update.log，绝不打扰前台。
+#[tauri::command]
+fn update_background_start(app: tauri::AppHandle) -> Result<Value, String> {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(json!({"started": false, "reason": "already running"}));
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = update_background_run(&app).await {
+            eprintln!("[dsh-update] background update failed: {e}");
+        }
+    });
+    Ok(json!({"started": true}))
+}
+
+/// 同一版本 60s 内只弹一次窗（WebView 导航后 JS 不再介入，这里是唯一去重）。
+static LAST_PROMPTED: std::sync::Mutex<Option<(String, Instant)>> = std::sync::Mutex::new(None);
+
+/// 后台链路主体：检查(用户偏好源) → WiFi 门 → 下载 → 弹窗 → 安装。
+/// 「跳过此版本」记在 WebView localStorage，后台任务读不到它——60s 去重是
+/// 热启动兜底；冷启动再弹属可接受行为（用户可再点「稍后」）。
+async fn update_background_run(app: &tauri::AppHandle) -> Result<(), String> {
+    let cfg = app_config_json();
+    let source = normalize_source_str(&cfg.update_source);
+
+    let update = match bg_check_update(&source).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return Ok(()), // 已是最新，静默结束
+        Err(e) => return Err(e),
+    };
+    if let Ok(last) = LAST_PROMPTED.lock() {
+        if let Some((ver, at)) = last.as_ref() {
+            if ver == &update.version && at.elapsed() < Duration::from_secs(60) {
+                return Ok(());
+            }
+        }
+    }
+
+    // WiFi 门：蜂窝/无网/判定失败都不自动下载（用户 2026-11-19 定）。
+    if !bg_is_wifi().await? {
+        eprintln!(
+            "[dsh-update] not on wifi, skip background download v{}",
+            update.version
+        );
+        return Ok(());
+    }
+
+    // 后台下载（进度无处可报也不需要报；SHA-256 与前台同一条路径）。
+    let (path, size, _digest) = download_to_cache(
+        app,
+        &update.url,
+        Some(update.sha256.as_str()),
+        Some(update.filename.as_str()).filter(|s| !s.trim().is_empty()),
+        |_, _| {},
+    )
+    .await?;
+    eprintln!(
+        "[dsh-update] downloaded v{} ({} bytes, {}) -> {}",
+        update.version,
+        size,
+        update.filename,
+        path.display()
+    );
+
+    // 弹窗询问（JNI → UpdateBridge.showPrompt，原生对话框）。
+    if !bg_prompt_install(&update.version).await? {
+        mark_prompted(&update.version);
+        return Ok(());
+    }
+    mark_prompted(&update.version);
+    // 立即安装：复用既有 install_update（Android 走 InstallBridge 的
+    // FileProvider + PackageInstaller 双通道）。它是同步命令，直接调用。
+    #[cfg(target_os = "android")]
+    let install_result: Result<(), String> =
+        install_update(app.clone(), path.to_string_lossy().into_owned());
+    #[cfg(not(target_os = "android"))]
+    let install_result: Result<(), String> = install_update(
+        app.clone(),
+        path.to_string_lossy().into_owned(),
+    );
+    install_result
+}
+
+fn mark_prompted(version: &str) {
+    if let Ok(mut guard) = LAST_PROMPTED.lock() {
+        *guard = Some((version.to_string(), Instant::now()));
+    }
+}
+
+/// WiFi 判定：JNI → UpdateBridge.precheck（ConnectivityManager）。
+/// false = 蜂窝/无网/判定失败，都不自动下载。
+#[cfg(target_os = "android")]
+async fn bg_is_wifi() -> Result<bool, String> {
+    let raw = tokio::task::spawn_blocking(|| {
+        call_update_bridge("precheck", "(Landroid/app/Activity;)Ljava/lang/String;", &[])
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking: {e}"))??;
+    let v: Value = serde_json::from_str(&raw).map_err(|e| format!("precheck 响应解析失败: {e}"))?;
+    Ok(v.get("wifi").and_then(Value::as_bool).unwrap_or(false))
+}
+
+#[cfg(not(target_os = "android"))]
+async fn bg_is_wifi() -> Result<bool, String> {
+    // 桌面无后台链路（前端 presentUpdate 流程保留），该函数不应被调用。
+    Err("后台自动更新仅在 Android 上运行".into())
+}
+
+/// 弹窗询问：JNI → UpdateBridge.showPrompt。true = 用户点了「立即安装」。
+/// Activity 由 call_update_bridge 自动打头（签名首参恒为 Activity）。
+#[cfg(target_os = "android")]
+async fn bg_prompt_install(version: &str) -> Result<bool, String> {
+    let message = format!(
+        "新版本 v{version} 已在后台下载完成（WiFi 网络，完整性校验通过）。是否立即安装？"
+    );
+    let raw = tokio::task::spawn_blocking(move || {
+        call_update_bridge(
+            "showPrompt",
+            "(Landroid/app/Activity;Ljava/lang/String;)Ljava/lang/String;",
+            &[&message],
+        )
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking: {e}"))??;
+    let v: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("showPrompt 响应解析失败: {e}"))?;
+    Ok(v.get("install").and_then(Value::as_bool).unwrap_or(false))
+}
+
+#[cfg(not(target_os = "android"))]
+async fn bg_prompt_install(_version: &str) -> Result<bool, String> {
+    Err("后台自动更新仅在 Android 上运行".into())
+}
+
+/// UpdateBridge 的 JNI 调用路径：与 call_bridge 同一形状（取缓存类 → 现造
+/// 字符串参数 → call_static_method → 读回 String），差异只有一点——每个
+/// 调用的第一个实参恒为 Activity（precheck/showPrompt 的 Kotlin 签名都是
+/// `fun x(activity: Activity, ...)`），这里自动拼在 str_args 前面。
+/// 不做成第三个通用桥是因为两个调用面已完全覆盖，抽象面越小越好。
+#[cfg(target_os = "android")]
+fn call_update_bridge(method: &str, sig: &str, str_args: &[&str]) -> Result<String, String> {
+    let vm = android_bridge::VM.get().ok_or("native bridge 未初始化")?;
+    let act_global = android_bridge::ACTIVITY.get().ok_or("activity 未初始化")?;
+    let mut env = vm.attach_current_thread().map_err(|e| format!("attach jvm: {e}"))?;
+    let activity = act_global.as_obj();
+
+    let outcome = (|| -> Result<String, String> {
+        // attached 线程的 find_class 只看系统 classloader（1.0.24 真机教训），
+        // 应用类必须走 nativeInitBridge 缓存的全局引用（同 COOKIE_CLASS）。
+        let cls = bridge_class(&mut env, &android_bridge::UPDATE_CLASS, "UpdateBridge")?;
+        // 字符串参数必须在本 env 里现造（JString 绑 env 的 local frame，
+        // 跨 env 传是未定义行为）——与 call_bridge 同一约定。
+        let mut jstr_locals: Vec<jni::objects::JString> = Vec::with_capacity(str_args.len());
+        for a in str_args {
+            let js = env.new_string(a).map_err(|e| format!("{method} 参数构造失败: {e}"))?;
+            jstr_locals.push(js);
+        }
+        // JString 对 JObject 有 Deref，&JString 会自动强转成 &JObject（与
+        // call_bridge 同一写法）；Activity 本身就是 &JObject。
+        let mut jargs: Vec<jni::objects::JValue> = Vec::with_capacity(jstr_locals.len() + 1);
+        jargs.push(jni::objects::JValue::Object(activity));
+        for js in &jstr_locals {
+            jargs.push(jni::objects::JValue::Object(js));
+        }
+        let ret = env
+            .call_static_method(cls, method, sig, &jargs)
+            .map_err(|e| format!("{method} 调用失败: {e}"))?;
+        match ret {
+            jni::objects::JValueOwned::Object(o) => {
+                let s = env
+                    .get_string((&o).into())
+                    .map_err(|e| format!("{method} 返回值读取失败: {e}"))?;
+                Ok(s.to_string_lossy().into_owned())
+            }
+            other => Err(format!("{method} 返回了非对象类型: {other:?}")),
+        }
+    })();
+
+    match outcome {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            // jni crate 的 JavaException 不带类名/消息；这里补上并清掉挂起
+            // 异常（不清会让 ART 回抛）——与 call_bridge 同一错误语义。
+            let detail = jni_pending_exception(&mut env);
+            let _ = env.exception_clear();
+            Err(match detail {
+                Some(d) => format!("UpdateBridge.{e}（Java: {d}）"),
+                None => format!("UpdateBridge.{e}"),
+            })
+        }
+    }
+}
+
+/// 下载源字符串的合法化：gitee/relay 之外一律 github（与 JS normalizeSource
+/// 同一回落，后台任务用）。
+fn normalize_source_str(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "gitee" => "gitee".into(),
+        "relay" => "relay".into(),
+        _ => "github".into(),
+    }
 }
 
 // --- 扫码配对 ---------------------------------------------------------------
@@ -750,6 +1434,9 @@ mod android_bridge {
     /// WebDataWipeNative（全量清理）的 Class 全局引用。规则与 COOKIE_CLASS 相同：
     /// 必须在 nativeInitBridge 里 find_class 缓存，attached 线程找不到应用类。
     pub static WIPE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+    /// UpdateBridge（后台自动更新：WiFi 判定 + 完成弹窗）的 Class 全局引用。
+    /// 规则与 COOKIE_CLASS 相同：nativeInitBridge 主线程 find_class 缓存。
+    pub static UPDATE_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 
     /// 包名 com.namelessric.dsh_mobile 的 JNI 段为 com/namelessric/dsh_1mobile
     /// （下划线转义成 _1），对应 Kotlin MainActivity companion 里的
@@ -781,6 +1468,12 @@ mod android_bridge {
         if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/WebDataWipeNative") {
             if let Ok(g) = env.new_global_ref(&cls) {
                 let _ = WIPE_CLASS.set(g);
+            }
+        }
+        // UpdateBridge（后台自动更新）同理：主线程 find_class 缓存。
+        if let Ok(cls) = env.find_class("com/namelessric/dsh_mobile/UpdateBridge") {
+            if let Ok(g) = env.new_global_ref(&cls) {
+                let _ = UPDATE_CLASS.set(g);
             }
         }
     }

@@ -59,3 +59,7 @@
 # 所以 CookieBridge 的 keep 仍然必须（两者一起保）。
 -keep class com.namelessric.dsh_mobile.WebDataWipe { *; }
 -keep class com.namelessric.dsh_mobile.WebDataWipeNative { *; }
+# 后台自动更新桥（2026-11-19）：precheck/showPrompt 只由 Rust 后台任务经 JNI
+# 按名字调用（WebView 已导航进 GUI，这是唯一能弹窗的通道）。R8 看不见任何
+# Java 侧引用，漏 keep = 下载完静默失效，用户永远看不到「是否更新」弹窗。
+-keep class com.namelessric.dsh_mobile.UpdateBridge { *; }
