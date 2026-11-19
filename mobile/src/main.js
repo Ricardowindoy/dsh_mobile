@@ -513,6 +513,9 @@ async function startAutoUpdate(update) {
     const args = {
       url: update.url,
       expectedSha256: update.sha256 || "",
+      // 资产原名（三个源都带）：桌面端靠扩展名选打开方式；relay 的 URL 末段
+      // 是 download?platform=…，不能当文件名用。
+      filename: update.filename || "",
     };
     if (channel) args.onProgress = channel;
     downloadedApk = await tauriInvoke("download_update", args);
@@ -1522,11 +1525,38 @@ async function boot() {
     tokenInput.value = cfg.accessToken || "";
     // 同步到两处，防止旧版本只写了 localStorage。
     if (cfg.relayUrl) saveConfig(cfg);
+    // 下拉回填用户上次选的源（cfg.updateSource 优先，其次 localStorage）。
+    if (updateSourceEl) updateSourceEl.value = normalizeSource(cfg.updateSource || getUpdateSource());
+    // 进节点提速（用户 2026-11-19 定）：Android 上把更新检查整体移出关键
+    // 路径——预检只等 token 校验，通过就立即进 GUI；更新链路（检查→WiFi
+    // 判定→下载→弹窗→安装）交给 Rust 后台任务跑，boot 时 fire-and-forget
+    // 触发一次即可。桌面仍走「预检带更新检查」的老流程（桌面没有 WiFi 门
+    // 与原生弹窗，更新卡片是唯一交互面）。
+    const isAndroid = platformArch().platform === "android";
+    if (isAndroid) {
+      void tauriInvoke("update_background_start").catch((e) =>
+        log(`background update start failed: ${errMsg(e)}`),
+      );
+      const relay = normalizeRelay(cfg.relayUrl);
+      const probeP = cfg.deviceToken
+        ? probeDeviceToken(relay, cfg.deviceToken)
+        : cfg.accessToken ? probeToken(relay, cfg.accessToken) : Promise.resolve(null);
+      probeP.then((probeErr) => {
+        bootMark("preflightDone");
+        if (probeErr) {
+          // token 有问题：优先报错，停在设置页。
+          errorEl.hidden = false;
+          errorTextEl.textContent = probeErr;
+          return;
+        }
+        log("preflight ok (update moved to background), auto connect");
+        connect(cfg, true);
+      });
+      return;
+    }
     // 并行执行更新检查与 token 预检（两个独立控制面请求，串行会多
     // 一个 RTT；移动网络每 RTT 几百 ms）。
     const relay = normalizeRelay(cfg.relayUrl);
-    // 下拉回填用户上次选的源（cfg.updateSource 优先，其次 localStorage）。
-    if (updateSourceEl) updateSourceEl.value = normalizeSource(cfg.updateSource || getUpdateSource());
     const updateP = checkUpdate(relay).catch((e) => ({ update: null, error: errMsg(e) }));
     const probeP = cfg.deviceToken
       ? probeDeviceToken(relay, cfg.deviceToken)
