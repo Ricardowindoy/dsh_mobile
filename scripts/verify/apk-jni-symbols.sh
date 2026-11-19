@@ -36,7 +36,8 @@ CLASSES=$(grep -oE 'find_class\(\s*"com/namelessric/dsh_mobile/[A-Za-z0-9_$]+"' 
 #    NoSuchMethodError 就是这么上线的）。所以另有一条兜底：lib.rs 里每个
 #    call_*_bridge("<方法>", ...) 的字面量都必须出现在下面这份名单里，
 #    不在就 SKIP_AS_ERROR（闸门不认识 = 闸门失效，不是"通过"）。
-METHODS="listSites clearSite wipeAll"
+# UpdateBridge（1.0.31 后台自动更新）：precheck/showPrompt 只被 Rust 反射调用。
+METHODS="listSites clearSite wipeAll precheck showPrompt"
 
 # 从 lib.rs 抽 JNI 入口调用，用来校验上面的名单没漏项。
 # 只认**命令层**的调用形态 `call_<x>_bridge("方法名", "签名"...)`：共用入口
